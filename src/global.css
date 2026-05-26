@@ -1,9 +1,104 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 :root {
-  --font-display:
-    Spline Sans, Inter, ui-sans-serif, system-ui, sans-serif, Apple Color Emoji, Segoe UI Emoji,
-    Segoe UI Symbol, Noto Color Emoji;
-  --font-mono:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace;
-  --font-rounded: 'SF Pro Rounded', 'Hiragino Maru Gothic ProN', Meiryo, 'MS PGothic', sans-serif;
-  --font-serif: Georgia, 'Times New Roman', serif;
+    /* Brand Palette - Earthy & Fresh */
+    --brand-dark: 215 28% 17%;
+    /* Deep charcoal */
+    --brand-green: 158 55% 42%;
+    /* Primary Green */
+    --brand-green-light: 158 55% 95%;
+    /* Light Green tint */
+    --brand-cream: 36 33% 97%;
+    /* Warm background */
+    --brand-orange: 24 95% 65%;
+    /* Accent/Alert */
+    --background: 36 33% 97%;
+    --foreground: 215 28% 17%;
+    --primary: 158 55% 42%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 158 30% 92%;
+    --secondary-foreground: 158 55% 25%;
+    --muted: 220 14% 94%;
+    --muted-foreground: 220 8% 56%;
+    --accent: 24 95% 65%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 158 55% 42%;
+    --card: 0 0% 100%;
+    --card-foreground: 215 28% 17%;
+    --radius: 1rem;
+    --font-sans: 'DM Sans', sans-serif;
+    --font-display: 'Outfit', sans-serif;
+}
+
+.dark {
+    --background: 215 28% 17%;
+    --foreground: 36 33% 97%;
+    --primary: 158 55% 42%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 215 20% 25%;
+    --secondary-foreground: 158 55% 85%;
+    --muted: 215 20% 25%;
+    --muted-foreground: 215 10% 65%;
+    --card: 215 25% 20%;
+    --card-foreground: 36 33% 97%;
+    --border: 215 20% 30%;
+    --input: 215 20% 30%;
+}
+
+@layer base {
+    * {
+        @apply border-border;
+    }
+    body {
+        @apply bg-background text-foreground antialiased;
+        font-family: var(--font-sans);
+        padding-bottom: 5rem;
+        /* Space for bottom nav */
+    }
+    h1,
+    h2,
+    h3,
+    h4,
+    h5,
+    h6 {
+        font-family: var(--font-display);
+        @apply font-bold tracking-tight;
+    }
+}
+
+@layer utilities {
+    .pb-safe {
+        padding-bottom: env(safe-area-inset-bottom);
+    }
+    .hide-scrollbar::-webkit-scrollbar {
+        display: none;
+    }
+    .hide-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+    }
+}
+
+
+/* Custom Animations */
+
+.fade-in {
+    animation: fadeIn 0.5s ease-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
