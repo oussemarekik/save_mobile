@@ -1,11 +1,16 @@
 import React, { useState } from "react";
-import { Link, useLocation } from "wouter";
-import { Clock, ShoppingBag, Heart } from "lucide-react";
-import { motion } from "framer-motion";
-import type { Product, Store } from "@/lib/mock-data";
+import {
+  View, Text, Image, TouchableOpacity, StyleSheet, ActivityIndicator,
+} from "react-native";
+import { useRouter } from "expo-router";
 import { useFavorites, useToggleFavorite, useCreateOrder } from "@/hooks/use-shop";
 import { useAuth } from "@/hooks/use-auth";
-import { useToast } from "@/hooks/use-toast";
+import { Ionicons } from "@expo/vector-icons";
+import Toast from "react-native-toast-message";
+import type { Product, Store } from "@/lib/mock-data";
+
+const PRIMARY = "#16a34a";
+const FALLBACK = "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&q=80";
 
 interface BagCardProps {
   product: Product;
@@ -13,178 +18,226 @@ interface BagCardProps {
 }
 
 export function BagCard({ product, store }: BagCardProps) {
+  const router = useRouter();
   const { data: favorites } = useFavorites();
   const { mutate: toggleFavorite } = useToggleFavorite();
   const { mutate: createOrder, isPending } = useCreateOrder();
   const { isAuthenticated } = useAuth();
-  const { toast } = useToast();
-  const [, setLocation] = useLocation();
   const [isFavorited, setIsFavorited] = useState(favorites?.includes(product.id) || false);
+  const [imgError, setImgError] = useState(false);
 
-  // Calculate discount only if originalPrice exists and is greater than price
   const originalPriceValue = product.originalPrice || 0;
   const priceValue = product.price || 0;
   const discount = originalPriceValue > priceValue && originalPriceValue > 0
     ? Math.round(((originalPriceValue - priceValue) / originalPriceValue) * 100)
     : 0;
 
-  const handleFavorite = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const price = `$${(priceValue / 100).toFixed(2)}`;
+  const originalPrice = originalPriceValue > priceValue
+    ? `$${(originalPriceValue / 100).toFixed(2)}`
+    : null;
+
+  const handleFavorite = () => {
     toggleFavorite(product.id);
-    setIsFavorited(!isFavorited);
+    setIsFavorited((v) => !v);
   };
 
-  const handleOrder = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    
+  const handleOrder = () => {
     if (!isAuthenticated) {
-      toast({
-        title: "Sign in required",
-        description: "Please sign in to order this bag",
-        variant: "destructive",
-      });
-      setLocation("/signin");
+      Toast.show({ type: "error", text1: "Sign in required", text2: "Please sign in to order this bag" });
+      router.push("/(auth)/signin");
       return;
     }
-
     if (product.quantity === 0) {
-      toast({
-        title: "Sold out",
-        description: "This item is no longer available",
-        variant: "destructive",
-      });
+      Toast.show({ type: "error", text1: "Sold out", text2: "This item is no longer available" });
       return;
     }
-
     createOrder(
       { productId: product.id, quantity: 1 },
       {
-        onSuccess: () => {
-          toast({
-            title: "Order placed!",
-            description: "Your Magic Bag is reserved.",
-            className: "bg-primary text-primary-foreground border-none",
-          });
-        },
-        onError: (error: any) => {
-          toast({
-            title: "Error",
-            description: error?.message || "Failed to place order",
-            variant: "destructive",
-          });
-        },
+        onSuccess: () => Toast.show({ type: "success", text1: "Order placed!", text2: "Your Magic Bag is reserved." }),
+        onError: (error: any) => Toast.show({ type: "error", text1: "Error", text2: error?.message || "Failed to place order" }),
       }
     );
   };
 
-  const price = new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(priceValue / 100);
-
-  const originalPrice = originalPriceValue > 0
-    ? new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency: 'USD',
-      }).format(originalPriceValue / 100)
-    : null;
-
   return (
-    <Link href={`/product/${product.id}`}>
-      <motion.div 
-        whileHover={{ scale: 0.98 }}
-        whileTap={{ scale: 0.96 }}
-        className="group relative flex flex-col w-full bg-card rounded-xl overflow-hidden border border-border/50 shadow-sm hover:shadow-md transition-all duration-300 cursor-pointer"
-      >
-        {/* Image Section - Top */}
-        <div className="relative w-full h-40 overflow-hidden bg-muted">
-          <img
-            src={product.imageUrl || store?.imageUrl || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&q=80'}
-            alt={product.name || 'Food offer'}
-            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
-            onError={(e) => {
-              // Fallback to placeholder if image fails to load
-              (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&q=80';
-            }}
+    <TouchableOpacity
+      style={s.card}
+      activeOpacity={0.92}
+      onPress={() => router.push(`/product/${product.id}`)}
+    >
+      {/* Image */}
+      <View style={s.imageContainer}>
+        <Image
+          source={{ uri: imgError ? FALLBACK : (product.imageUrl || store?.imageUrl || FALLBACK) }}
+          style={s.image}
+          resizeMode="cover"
+          onError={() => setImgError(true)}
+        />
+
+        {/* Sold out overlay */}
+        {product.quantity === 0 && (
+          <View style={s.soldOutOverlay}>
+            <Text style={s.soldOutText}>Sold Out</Text>
+          </View>
+        )}
+
+        {/* Top-left badges */}
+        <View style={s.badgesRow}>
+          {discount > 0 && (
+            <View style={s.discountBadge}>
+              <Text style={s.discountBadgeText}>{discount}% OFF</Text>
+            </View>
+          )}
+          <View style={s.quantityBadge}>
+            <Text style={s.quantityBadgeText}>
+              {product.quantity > 0 ? `${product.quantity} left` : "Sold out"}
+            </Text>
+          </View>
+        </View>
+
+        {/* Favorite button */}
+        <TouchableOpacity style={s.favoriteButton} onPress={handleFavorite} activeOpacity={0.8}>
+          <Ionicons
+            name={isFavorited ? "heart" : "heart-outline"}
+            size={16}
+            color={isFavorited ? "#ef4444" : "#9ca3af"}
           />
-          {product.quantity === 0 && (
-            <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
-              <span className="text-white font-bold text-sm">Sold Out</span>
-            </div>
-          )}
-          <div className="absolute top-2 left-2 flex gap-1.5">
-            {discount > 0 && (
-              <div className="bg-accent text-accent-foreground px-2 py-1 rounded-md text-xs font-bold shadow-md">
-                {discount}% OFF
-              </div>
+        </TouchableOpacity>
+
+        {/* Store logo */}
+        {store?.logoUrl && (
+          <View style={s.storeLogo}>
+            <Image source={{ uri: store.logoUrl }} style={s.storeLogoImage} resizeMode="cover" />
+          </View>
+        )}
+      </View>
+
+      {/* Content */}
+      <View style={s.content}>
+        <View>
+          <Text style={s.storeName} numberOfLines={1}>{store?.name || "Unknown Store"}</Text>
+          <Text style={s.productName} numberOfLines={1}>{product.name || "Food Offer"}</Text>
+        </View>
+
+        {/* Pickup time */}
+        <View style={s.pickupRow}>
+          <View style={s.pickupBadge}>
+            <Ionicons name="time-outline" size={12} color="#555" />
+            <Text style={s.pickupText}>{product.pickupStart} - {product.pickupEnd}</Text>
+          </View>
+        </View>
+
+        {/* Price + Order button */}
+        <View style={s.footer}>
+          <View style={s.priceRow}>
+            <Text style={s.price}>{price}</Text>
+            {originalPrice && (
+              <Text style={s.originalPrice}>{originalPrice}</Text>
             )}
-            <div className="bg-white/95 backdrop-blur-sm px-2 py-1 rounded-md text-xs font-bold text-foreground shadow-md">
-              {product.quantity > 0 ? `${product.quantity} left` : 'Sold out'}
-            </div>
-          </div>
-          <motion.button
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.9 }}
-            onClick={handleFavorite}
-            className="absolute top-2 right-2 bg-white/95 backdrop-blur-sm rounded-full p-1.5 hover:bg-white transition-colors shadow-md"
+          </View>
+          <TouchableOpacity
+            style={[s.orderButton, (isPending || product.quantity === 0) && s.orderButtonDisabled]}
+            onPress={handleOrder}
+            disabled={isPending || product.quantity === 0}
+            activeOpacity={0.85}
           >
-            <Heart
-              size={16}
-              className={isFavorited ? "fill-red-500 text-red-500" : "text-gray-400"}
-            />
-          </motion.button>
-          {store.logoUrl && (
-            <div className="absolute -bottom-4 right-3 w-10 h-10 rounded-full border-2 border-background overflow-hidden shadow-md bg-white">
-              <img src={store.logoUrl} alt={store.name} className="w-full h-full object-cover" />
-            </div>
-          )}
-        </div>
-
-        {/* Content Section - Bottom */}
-        <div className="p-3 flex flex-col gap-2">
-          <div>
-            <h3 className="font-display font-bold text-base leading-tight text-foreground line-clamp-1 mb-0.5">{store?.name || 'Unknown Store'}</h3>
-            <p className="text-xs text-muted-foreground line-clamp-1">{product.name || 'Food Offer'}</p>
-          </div>
-
-          <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-            <div className="flex items-center gap-1 bg-secondary/50 px-2 py-1 rounded-md">
-              <Clock size={12} />
-              <span>{product.pickupStart} - {product.pickupEnd}</span>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between pt-2 border-t border-border/50">
-            <div className="flex items-baseline gap-1.5">
-              <span className="text-lg font-bold text-primary">{price}</span>
-              {originalPrice && originalPriceValue > priceValue && (
-                <span className="text-xs text-muted-foreground line-through decoration-destructive/30">{originalPrice}</span>
-              )}
-            </div>
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={handleOrder}
-              disabled={isPending || product.quantity === 0}
-              className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground font-bold text-xs hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 shadow-sm"
-            >
-              {isPending ? (
-                <>
-                  <div className="w-3 h-3 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
-                  <span>...</span>
-                </>
-              ) : (
-                <>
-                  <ShoppingBag size={14} />
-                  <span>Order</span>
-                </>
-              )}
-            </motion.button>
-          </div>
-        </div>
-      </motion.div>
-    </Link>
+            {isPending ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <Ionicons name="bag-outline" size={14} color="#fff" />
+                <Text style={s.orderButtonText}>Order</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+      </View>
+    </TouchableOpacity>
   );
 }
+
+const s = StyleSheet.create({
+  card: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    shadowColor: "#000",
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+
+  // Image
+  imageContainer: { width: "100%", height: 160, backgroundColor: "#f0f0f0" },
+  image: { width: "100%", height: "100%" },
+  soldOutOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    alignItems: "center", justifyContent: "center",
+  },
+  soldOutText: { color: "#fff", fontWeight: "700", fontSize: 14 },
+
+  badgesRow: { position: "absolute", top: 8, left: 8, flexDirection: "row", gap: 6 },
+  discountBadge: {
+    backgroundColor: "#f59e0b", borderRadius: 6,
+    paddingHorizontal: 8, paddingVertical: 4,
+  },
+  discountBadgeText: { color: "#fff", fontSize: 11, fontWeight: "800" },
+  quantityBadge: {
+    backgroundColor: "rgba(255,255,255,0.95)", borderRadius: 6,
+    paddingHorizontal: 8, paddingVertical: 4,
+  },
+  quantityBadgeText: { color: "#111", fontSize: 11, fontWeight: "700" },
+
+  favoriteButton: {
+    position: "absolute", top: 8, right: 8,
+    backgroundColor: "rgba(255,255,255,0.95)",
+    borderRadius: 999, padding: 6,
+    shadowColor: "#000", shadowOpacity: 0.1, shadowRadius: 4, elevation: 2,
+  },
+
+  storeLogo: {
+    position: "absolute", bottom: -16, right: 12,
+    width: 40, height: 40, borderRadius: 20,
+    borderWidth: 2, borderColor: "#fff",
+    overflow: "hidden", backgroundColor: "#fff",
+    shadowColor: "#000", shadowOpacity: 0.1, shadowRadius: 4, elevation: 2,
+  },
+  storeLogoImage: { width: "100%", height: "100%" },
+
+  // Content
+  content: { padding: 12, gap: 8 },
+  storeName: { fontSize: 15, fontWeight: "800", color: "#111", marginBottom: 2 },
+  productName: { fontSize: 12, color: "#888" },
+
+  pickupRow: { flexDirection: "row" },
+  pickupBadge: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    backgroundColor: "#f5f5f5", borderRadius: 8,
+    paddingHorizontal: 8, paddingVertical: 5,
+  },
+  pickupText: { fontSize: 12, fontWeight: "500", color: "#555" },
+
+  footer: {
+    flexDirection: "row", alignItems: "center",
+    justifyContent: "space-between",
+    paddingTop: 8, borderTopWidth: 1, borderTopColor: "#f0f0f0",
+  },
+  priceRow: { flexDirection: "row", alignItems: "baseline", gap: 6 },
+  price: { fontSize: 18, fontWeight: "800", color: PRIMARY },
+  originalPrice: { fontSize: 12, color: "#aaa", textDecorationLine: "line-through" },
+
+  orderButton: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    backgroundColor: PRIMARY, borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 8,
+    shadowColor: PRIMARY, shadowOpacity: 0.25, shadowRadius: 4, elevation: 2,
+  },
+  orderButtonDisabled: { opacity: 0.5 },
+  orderButtonText: { color: "#fff", fontWeight: "700", fontSize: 12 },
+});

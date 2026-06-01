@@ -1,226 +1,110 @@
-import React, { useState } from "react";
-import { useLocation } from "wouter";
+// src/components/OAuthButtons.tsx
+import React from "react";
+import { TouchableOpacity, Text, View, StyleSheet, ActivityIndicator } from "react-native";
+import { useState } from "react";
 import { authApi } from "@/lib/api-client";
-import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
-import { Facebook } from "lucide-react";
-import { normalizeRedirectPath } from "@/lib/redirect-utils";
-
-declare global {
-  interface Window {
-    google?: any;
-    FB?: any;
-    gapi?: any;
-  }
-}
+import { useRouter } from "expo-router";
+import Toast from "react-native-toast-message";
 
 export function GoogleOAuthButton() {
-  const [, setLocation] = useLocation();
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
   const [isLoading, setIsLoading] = useState(false);
+  const queryClient = useQueryClient();
+  const router = useRouter();
 
-  const handleGoogleSignIn = async () => {
-    setIsLoading(true);
-    try {
-      // Load Google Identity Services
-      if (!window.google) {
-        const script = document.createElement('script');
-        script.src = 'https://accounts.google.com/gsi/client';
-        script.async = true;
-        script.defer = true;
-        document.head.appendChild(script);
-        
-        await new Promise((resolve) => {
-          script.onload = resolve;
-        });
-      }
-
-      // Initialize Google Sign In
-      window.google.accounts.id.initialize({
-        client_id: process.env.VITE_GOOGLE_CLIENT_ID || '',
-        callback: async (response: any) => {
-          try {
-            const authResponse = await authApi.googleAuth(response.credential);
-            
-            if (authResponse.accessToken) {
-              await queryClient.invalidateQueries({ queryKey: ["/auth/get-user-by-token"] });
-              
-              // Get updated user data to check role
-              const userData = await authApi.getUserByToken();
-              
-              toast({
-                title: "Signed in!",
-                description: "Welcome back!",
-                className: "bg-primary text-primary-foreground border-none",
-              });
-              
-              // Redirect based on user role, normalizing any old paths
-              const redirectTo = normalizeRedirectPath(authResponse.redirectTo, userData?.role);
-              setLocation(redirectTo);
-            }
-          } catch (error: any) {
-            toast({
-              title: "Sign in failed",
-              description: error.message || "Failed to sign in with Google",
-              variant: "destructive",
-            });
-          } finally {
-            setIsLoading(false);
-          }
-        },
-      });
-
-      // Trigger the sign-in flow
-      window.google.accounts.id.prompt((notification: any) => {
-        if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-          // Fallback: show one-tap UI
-          window.google.accounts.id.renderButton(
-            document.getElementById('google-signin-button') || document.body,
-            {
-              theme: 'outline',
-              size: 'large',
-              width: '100%',
-            }
-          );
-        }
-      });
-    } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to initialize Google Sign In",
-        variant: "destructive",
-      });
-      setIsLoading(false);
-    }
+  const handleGoogle = async () => {
+    Toast.show({ type: "info", text1: "Coming soon", text2: "Google sign-in will be available soon" });
   };
 
   return (
-    <button
-      onClick={handleGoogleSignIn}
-      disabled={isLoading || !process.env.VITE_GOOGLE_CLIENT_ID}
-      className="w-full py-3 rounded-xl bg-card border border-border hover:bg-secondary/50 transition-all active:scale-[0.99] flex items-center justify-center gap-3 font-medium disabled:opacity-50"
+    <TouchableOpacity
+      style={styles.button}
+      onPress={handleGoogle}
+      disabled={isLoading}
+      activeOpacity={0.85}
     >
       {isLoading ? (
-        <div className="w-5 h-5 border-2 border-foreground border-t-transparent rounded-full animate-spin" />
+        <ActivityIndicator size="small" color="#555" />
       ) : (
-        <svg className="w-5 h-5" viewBox="0 0 24 24">
-          <path
-            fill="currentColor"
-            d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-          />
-          <path
-            fill="currentColor"
-            d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-          />
-          <path
-            fill="currentColor"
-            d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
-          />
-          <path
-            fill="currentColor"
-            d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-          />
-        </svg>
+        <>
+          {/* Google G logo */}
+          <View style={styles.iconContainer}>
+            <Text style={styles.googleG}>G</Text>
+          </View>
+          <Text style={styles.buttonText}>Continue with Google</Text>
+        </>
       )}
-      Continue with Google
-    </button>
+    </TouchableOpacity>
   );
 }
 
 export function FacebookOAuthButton() {
-  const [, setLocation] = useLocation();
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleFacebookSignIn = async () => {
-    setIsLoading(true);
-    try {
-      // Load Facebook SDK
-      if (!window.FB) {
-        const script = document.createElement('script');
-        script.src = 'https://connect.facebook.net/en_US/sdk.js';
-        script.async = true;
-        script.defer = true;
-        document.head.appendChild(script);
-        
-        await new Promise((resolve) => {
-          script.onload = resolve;
-        });
-
-        // Initialize Facebook SDK
-        window.FB.init({
-          appId: process.env.VITE_FACEBOOK_APP_ID || '',
-          cookie: true,
-          xfbml: true,
-          version: 'v18.0'
-        });
-      }
-
-      // Login with Facebook
-      window.FB.login(async (response: any) => {
-        if (response.authResponse) {
-          try {
-            const authResponse = await authApi.facebookAuth(response.authResponse.accessToken);
-            
-            if (authResponse.accessToken) {
-              await queryClient.invalidateQueries({ queryKey: ["/auth/get-user-by-token"] });
-              
-              // Get updated user data to check role
-              const userData = await authApi.getUserByToken();
-              
-              toast({
-                title: "Signed in!",
-                description: "Welcome back!",
-                className: "bg-primary text-primary-foreground border-none",
-              });
-              
-              // Redirect based on user role, normalizing any old paths
-              const redirectTo = normalizeRedirectPath(authResponse.redirectTo, userData?.role);
-              setLocation(redirectTo);
-            }
-          } catch (error: any) {
-            toast({
-              title: "Sign in failed",
-              description: error.message || "Failed to sign in with Facebook",
-              variant: "destructive",
-            });
-          } finally {
-            setIsLoading(false);
-          }
-        } else {
-          toast({
-            title: "Sign in cancelled",
-            description: "Facebook sign in was cancelled",
-            variant: "destructive",
-          });
-          setIsLoading(false);
-        }
-      }, { scope: 'email,public_profile' });
-    } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to initialize Facebook Sign In",
-        variant: "destructive",
-      });
-      setIsLoading(false);
-    }
+  const handleFacebook = async () => {
+    Toast.show({ type: "info", text1: "Coming soon", text2: "Facebook sign-in will be available soon" });
   };
 
   return (
-    <button
-      onClick={handleFacebookSignIn}
-      disabled={isLoading || !process.env.VITE_FACEBOOK_APP_ID}
-      className="w-full py-3 rounded-xl bg-card border border-border hover:bg-secondary/50 transition-all active:scale-[0.99] flex items-center justify-center gap-3 font-medium disabled:opacity-50"
+    <TouchableOpacity
+      style={styles.button}
+      onPress={handleFacebook}
+      disabled={isLoading}
+      activeOpacity={0.85}
     >
       {isLoading ? (
-        <div className="w-5 h-5 border-2 border-foreground border-t-transparent rounded-full animate-spin" />
+        <ActivityIndicator size="small" color="#555" />
       ) : (
-        <Facebook className="w-5 h-5 text-blue-600" />
+        <>
+          <View style={[styles.iconContainer, styles.facebookIcon]}>
+            <Text style={styles.facebookF}>f</Text>
+          </View>
+          <Text style={styles.buttonText}>Continue with Facebook</Text>
+        </>
       )}
-      Continue with Facebook
-    </button>
+    </TouchableOpacity>
   );
 }
 
+const styles = StyleSheet.create({
+  button: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: "#f5f5f5",
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+  },
+  iconContainer: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+  },
+  googleG: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#4285F4",
+  },
+  facebookIcon: {
+    backgroundColor: "#1877F2",
+    borderColor: "#1877F2",
+  },
+  facebookF: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#fff",
+  },
+  buttonText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#111",
+  },
+});
