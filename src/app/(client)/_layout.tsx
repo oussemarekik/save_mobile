@@ -6,19 +6,19 @@ export default function ClientLayout() {
   const { isAuthenticated, user } = useAuth();
 
   if (!isAuthenticated) return <Redirect href="/(auth)/signin" />;
-  if (user?.role === "PROVIDER") return <Redirect href="/(provider)/ProviderDashboard" />;
+  if (user?.role === "PROVIDER") return <Redirect href="/(provider)/dashboard" />;
 
   return (
     <Tabs screenOptions={{ headerShown: false }}>
       <Tabs.Screen
-        name="home"
+        name="Home"
         options={{
           title: "Home",
           tabBarIcon: ({ color }) => <Ionicons name="home-outline" size={24} color={color} />,
         }}
       />
       <Tabs.Screen
-        name="browse"
+        name="Browse"
         options={{
           title: "Browse",
           tabBarIcon: ({ color }) => <Ionicons name="search-outline" size={24} color={color} />,

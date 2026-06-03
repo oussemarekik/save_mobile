@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -30,10 +30,13 @@ export default function SignIn() {
   const [isLoading, setIsLoading] = useState(false);
 
   // Redirect if already logged in
+// ✅ After
+useEffect(() => {
   if (user) {
     router.replace("/");
-    return null;
   }
+}, [user]);
+
 
   const handleLogin = async () => {
     if (!email || !password) {

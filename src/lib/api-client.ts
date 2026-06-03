@@ -3,19 +3,35 @@
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Platform } from "react-native";
 
-const API_BASE_URL = process.env.VITE_API_URL || "http://localhost:3001";
-
+const API_BASE_URL = Platform.OS === "web" ? "http://localhost:3001" : "http://192.168.176.1:3001";
 // ─── Token Storage (AsyncStorage) ─────────────────────────────────────────────
+// ─── Token Storage (AsyncStorage) ─────────────────────────────────────────────
+const isSSR = typeof window === "undefined";
+
 export const tokenStorage = {
-  get: (): Promise<string | null> => AsyncStorage.getItem("accessToken"),
-  set: (token: string): Promise<void> => AsyncStorage.setItem("accessToken", token),
+  get: (): Promise<string | null> => {
+    if (isSSR) return Promise.resolve(null);
+    return AsyncStorage.getItem("accessToken");
+  },
+  set: (token: string): Promise<void> => {
+    if (isSSR) return Promise.resolve();
+    return AsyncStorage.setItem("accessToken", token);
+  },
   remove: async (): Promise<void> => {
+    if (isSSR) return;
     await AsyncStorage.removeItem("accessToken");
     await AsyncStorage.removeItem("refreshToken");
   },
-  getRefresh: (): Promise<string | null> => AsyncStorage.getItem("refreshToken"),
-  setRefresh: (token: string): Promise<void> => AsyncStorage.setItem("refreshToken", token),
+  getRefresh: (): Promise<string | null> => {
+    if (isSSR) return Promise.resolve(null);
+    return AsyncStorage.getItem("refreshToken");
+  },
+  setRefresh: (token: string): Promise<void> => {
+    if (isSSR) return Promise.resolve();
+    return AsyncStorage.setItem("refreshToken", token);
+  },
 };
 
 // ─── API Request ───────────────────────────────────────────────────────────────

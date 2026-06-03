@@ -6,14 +6,14 @@ export function normalizeRedirectPath(redirectTo: string | undefined, userRole?:
   // If no redirect path provided, determine based on role
   if (!redirectTo) {
     if (userRole === "PROVIDER") {
-      return "/provider/dashboard";
+      return "/(provider)/dashboard";
     }
     return "/";
   }
 
   // Normalize provider paths
   if (redirectTo === "/provider/home" || redirectTo.startsWith("/provider/home")) {
-    return "/provider/dashboard";
+    return "/(provider)/dashboard";
   }
 
   // Normalize client paths
@@ -29,7 +29,7 @@ export function normalizeRedirectPath(redirectTo: string | undefined, userRole?:
  */
 export function getRedirectPathForRole(role?: string): string {
   if (role === "PROVIDER") {
-    return "/provider/dashboard";
+    return "/(provider)/dashboard";
   }
   return "/";
 }

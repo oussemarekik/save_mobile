@@ -11,10 +11,10 @@ export function ProviderBottomNav() {
     { 
       icon: LayoutDashboard, 
       label: "Dashboard", 
-      href: "/provider/dashboard", 
+      href: "/(provider)/dashboard", 
       matchPattern: (path: string) => 
-        path === "/provider/dashboard" || 
-        path.startsWith("/provider/dashboard/")
+        path === "/(provider)/dashboard" || 
+        path.startsWith("/(provider)/dashboard/")
     },
     { 
       icon: Package, 

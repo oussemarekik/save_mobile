@@ -17,8 +17,8 @@ export function BottomNav() {
     { 
       icon: Map, 
       label: "Browse", 
-      href: "/browse", 
-      matchPattern: (path: string) => path === "/browse" || path.startsWith("/browse/") 
+      href: "/Browse", 
+      matchPattern: (path: string) => path === "/Browse" || path.startsWith("/Browse/") 
     },
     { 
       icon: ShoppingBag, 

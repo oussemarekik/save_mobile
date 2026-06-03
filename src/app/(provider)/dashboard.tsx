@@ -75,7 +75,7 @@ export default function ProviderDashboard() {
         <Ionicons name="cube-outline" size={64} color="#888" />
         <Text style={styles.centeredTitle}>Provider account required</Text>
         <Text style={styles.centeredSubtitle}>You need a provider account to access the dashboard</Text>
-        <TouchableOpacity style={styles.primaryButton} onPress={() => router.push("/(auth)/provider-signup")}>
+        <TouchableOpacity style={styles.primaryButton} onPress={() => router.push("/(auth)/ProviderSignup")}>
           <Text style={styles.primaryButtonText}>Create Provider Account</Text>
         </TouchableOpacity>
       </View>
