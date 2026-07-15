@@ -294,11 +294,26 @@ export default function SignIn() {
         throw new Error(t("signin.forgot_password_error"));
       }
     } catch (error: any) {
+      const status = error?.status;
+      const backendMessage =
+        typeof error?.body === "object" &&
+        error?.body !== null &&
+        "message" in error.body
+          ? String((error.body as { message?: string }).message || "")
+          : typeof error?.message === "string"
+            ? error.message
+            : "";
+      const noAccount =
+        status === 404 || /no account|does not exist/i.test(backendMessage);
+
       showError(
-        sanitizeErrorMessage(error, {
-          action: "send reset code",
-          defaultMessage: t("signin.forgot_password_error"),
-        })
+        noAccount
+          ? t("signin.forgot_password_no_account") ||
+              "No account found with this email address."
+          : sanitizeErrorMessage(error, {
+              action: "send reset code",
+              defaultMessage: t("signin.forgot_password_error"),
+            })
       );
     } finally {
       setSubmitting(false);
