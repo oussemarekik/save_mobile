@@ -1,14 +1,22 @@
 {
   "expo": {
-    "name": "save_the_plate",
-    "slug": "save_the_plate",
+    "name": "Save The Plate",
+    "slug": "savetheplate",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "savetheplate",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "tn.savetheplate.app",
+      "buildNumber": "1",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Save The Plate needs camera access to scan pickup QR codes.",
+        "NSPhotoLibraryUsageDescription": "Save The Plate needs photo library access to upload food offer images.",
+        "NSLocationWhenInUseUsageDescription": "Save The Plate uses your location to show nearby food offers."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -17,8 +25,14 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.save_the_plate"
+      "package": "tn.savetheplate.app",
+      "versionCode": 1,
+      "permissions": [
+        "CAMERA",
+        "READ_MEDIA_IMAGES",
+        "ACCESS_FINE_LOCATION"
+      ],
+      "predictiveBackGestureEnabled": false
     },
     "web": {
       "output": "single",
@@ -35,11 +49,35 @@
             "imageWidth": 76
           }
         }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Save The Plate to access your camera to scan pickup QR codes."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Save The Plate uses your location to show nearby food offers."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Save The Plate to access your photos to upload food offer images."
+        }
       ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "replace-with-your-eas-project-id"
+      }
+    },
+    "owner": "savetheplate"
   }
 }

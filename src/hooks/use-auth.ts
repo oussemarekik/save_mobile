@@ -1,5 +1,7 @@
+import { useEffect, useSyncExternalStore } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { authApi, tokenStorage } from "@/lib/api-client";
+import { clearAuthSession } from "@/lib/auth-session";
 
 export type AuthenticatedUser = {
   id: number;
@@ -8,8 +10,33 @@ export type AuthenticatedUser = {
   role: string;
   profileImage?: string;
   location?: string;
+  phoneNumber?: string;
   mapsLink?: string;
 };
+
+let hasTokenCache: boolean | null = null;
+const tokenListeners = new Set<() => void>();
+
+function subscribeToToken(listener: () => void) {
+  tokenListeners.add(listener);
+  return () => tokenListeners.delete(listener);
+}
+
+function getTokenSnapshot(): boolean | null {
+  return hasTokenCache;
+}
+
+function setHasTokenShared(value: boolean | null) {
+  hasTokenCache = value;
+  tokenListeners.forEach((listener) => listener());
+}
+
+async function readTokenFromStorage(): Promise<boolean> {
+  const token = await tokenStorage.get();
+  const present = !!token;
+  setHasTokenShared(present);
+  return present;
+}
 
 async function fetchUser(): Promise<AuthenticatedUser | null> {
   try {
@@ -21,45 +48,69 @@ async function fetchUser(): Promise<AuthenticatedUser | null> {
       role: user.role,
       profileImage: user.profileImage,
       location: user.location,
+      phoneNumber: user.phoneNumber,
       mapsLink: user.mapsLink,
     };
-  } catch (error) {
-    // If unauthorized, clear tokens and return null
-    tokenStorage.remove();
+  } catch {
+    await clearAuthSession();
+    setHasTokenShared(false);
     return null;
   }
 }
 
 async function logout(): Promise<void> {
-  tokenStorage.remove();
-  // Tokens are cleared, user will be redirected on next auth check
+  await clearAuthSession();
 }
 
 export function useAuth() {
   const queryClient = useQueryClient();
-  const token = tokenStorage.get();
-  
-  const { data: user, isLoading } = useQuery<AuthenticatedUser | null>({
+  const hasToken = useSyncExternalStore(subscribeToToken, getTokenSnapshot, () => null);
+
+  useEffect(() => {
+    readTokenFromStorage();
+  }, []);
+
+  const { data: user, isLoading: isUserLoading } = useQuery<AuthenticatedUser | null>({
     queryKey: ["/auth/get-user-by-token"],
     queryFn: fetchUser,
     retry: false,
-    staleTime: 1000 * 60 * 5, // 5 minutes
-    enabled: !!token, // Only fetch if we have a token
+    staleTime: 1000 * 60 * 5,
+    enabled: hasToken === true,
   });
 
   const logoutMutation = useMutation({
     mutationFn: logout,
-    onSuccess: () => {
+    onMutate: () => {
+      setHasTokenShared(false);
       queryClient.setQueryData(["/auth/get-user-by-token"], null);
-      queryClient.clear(); // Clear all queries on logout
+    },
+    onSuccess: () => {
+      queryClient.clear();
     },
   });
 
+  const isLoading = hasToken === null || (hasToken && isUserLoading);
+
+  const refreshAuth = async (): Promise<AuthenticatedUser | null> => {
+    const token = await tokenStorage.get();
+    setHasTokenShared(!!token);
+    if (!token) {
+      queryClient.setQueryData(["/auth/get-user-by-token"], null);
+      return null;
+    }
+    return queryClient.fetchQuery({
+      queryKey: ["/auth/get-user-by-token"],
+      queryFn: fetchUser,
+    });
+  };
+
   return {
-    user,
+    user: hasToken ? user ?? null : null,
     isLoading,
-    isAuthenticated: !!user,
+    isAuthenticated: hasToken === true && !!user,
     logout: logoutMutation.mutate,
+    logoutAsync: logoutMutation.mutateAsync,
     isLoggingOut: logoutMutation.isPending,
+    refreshAuth,
   };
 }

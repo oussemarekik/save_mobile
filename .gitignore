@@ -41,3 +41,8 @@ example
 # generated native folders
 /ios
 /android
+
+# env files (never commit secrets)
+.env
+.env.*
+!.env.example

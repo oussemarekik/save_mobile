@@ -9,6 +9,7 @@ import { useOrders } from "@/hooks/use-shop";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ordersApi } from "@/lib/api-client";
 import { Ionicons } from "@expo/vector-icons";
+import { formatPrice } from "@/utils/formatPrice";
 import Toast from "react-native-toast-message";
 import QRCode from "react-native-qrcode-svg";
 
@@ -212,7 +213,7 @@ function OrderCard({ order, onCancel, isCancelling }: {
               <Ionicons name="cube-outline" size={12} color={PRIMARY} />
               <Text style={s.cardQtyText}>Qty: {order.quantity}</Text>
             </View>
-            <Text style={s.cardPrice}>${((order.totalPrice || 0) / 100).toFixed(2)}</Text>
+            <Text style={s.cardPrice}>{formatPrice(order.totalPrice || 0)}</Text>
           </View>
         </View>
       </View>

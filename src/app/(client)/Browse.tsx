@@ -21,7 +21,14 @@ export default function Browse() {
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
 
-  const filteredProducts = products?.filter((p:any) => {
+  const filteredProducts = products?.filter((p: any) => {
+    const matchesSearch =
+      !search.trim() ||
+      p.name?.toLowerCase().includes(search.toLowerCase()) ||
+      p.store?.name?.toLowerCase().includes(search.toLowerCase()) ||
+      p.description?.toLowerCase().includes(search.toLowerCase());
+
+    if (!matchesSearch) return false;
     if (filter === "available") return p.quantity > 0;
     if (filter === "favorites") return favorites?.includes(p.id);
     return true;
@@ -77,7 +84,7 @@ export default function Browse() {
             <Ionicons name="search-outline" size={18} color="#888" style={styles.searchIcon} />
             <TextInput
               style={styles.searchInput}
-              placeholder="Search map area..."
+              placeholder="Search offers..."
               placeholderTextColor="#888"
               value={search}
               onChangeText={setSearch}

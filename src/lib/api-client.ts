@@ -4,9 +4,19 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
+import { ApiError, extractMessageFromApiBody } from "@/utils/errorUtils";
+import { normalizeUploadFile } from "@/lib/upload-file";
 
-const API_BASE_URL = Platform.OS === "web" ? "http://localhost:3001" : "http://192.168.176.1:3001";
-// ─── Token Storage (AsyncStorage) ─────────────────────────────────────────────
+const DEFAULT_API_BASE_URL =
+  Platform.select({
+    web: "https://savetheplate.tn/api",
+    ios: "https://savetheplate.tn/api",
+    android: "https://savetheplate.tn/api",
+    default: "https://savetheplate.tn/api",
+  }) || "https://savetheplate.tn/api";
+
+const API_BASE_URL = (process.env.EXPO_PUBLIC_API_URL || DEFAULT_API_BASE_URL).replace(/\/$/, "");
+
 // ─── Token Storage (AsyncStorage) ─────────────────────────────────────────────
 const isSSR = typeof window === "undefined";
 
@@ -23,6 +33,7 @@ export const tokenStorage = {
     if (isSSR) return;
     await AsyncStorage.removeItem("accessToken");
     await AsyncStorage.removeItem("refreshToken");
+    await AsyncStorage.removeItem("auth-intent-role");
   },
   getRefresh: (): Promise<string | null> => {
     if (isSSR) return Promise.resolve(null);
@@ -47,29 +58,51 @@ async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promi
 
   const url = endpoint.startsWith("http") ? endpoint : `${API_BASE_URL}${endpoint}`;
 
+  if (__DEV__) {
+    console.log("[API] Request:", options.method || "GET", url);
+    console.log("[API] Has token:", !!token);
+  }
+
   const response = await fetch(url, { ...options, headers });
 
   if (!response.ok) {
     if (response.status === 401) {
       await tokenStorage.remove();
-      throw new Error("Unauthorized");
     }
-    let errorText = "";
+
+    let body: unknown = null;
+    let rawText = "";
+
     try {
-      errorText = await response.text();
-      try {
-        const errorJson = JSON.parse(errorText);
-        if (errorJson.message) {
-          throw new Error(Array.isArray(errorJson.message) ? errorJson.message.join(", ") : errorJson.message);
+      rawText = await response.text();
+      if (rawText) {
+        try {
+          body = JSON.parse(rawText);
+        } catch {
+          body = rawText;
         }
-        if (errorJson.error) throw new Error(errorJson.error);
-      } catch (parseError) {
-        // not JSON
       }
     } catch {
-      errorText = `HTTP ${response.status}: ${response.statusText}`;
+      rawText = "";
     }
-    throw new Error(errorText || `HTTP ${response.status}: ${response.statusText}`);
+
+    const message = extractMessageFromApiBody(body ?? rawText, response.status);
+
+    if (__DEV__) {
+      console.error("[API] Error response:", { status: response.status, body: body ?? rawText });
+    }
+
+    if (response.status === 401) {
+      throw new ApiError(
+        message === "Something went wrong. Please try again."
+          ? "Your session has expired. Please sign in again."
+          : message,
+        401,
+        body
+      );
+    }
+
+    throw new ApiError(message, response.status, body);
   }
 
   const contentType = response.headers.get("content-type");
@@ -82,8 +115,32 @@ export const authApi = {
   register: async (email: string, username: string, password: string) => {
     const response = await apiRequest<{
       message: string; accessToken: string; refreshToken: string;
-      user: { id: number; email: string; role: string } | null; redirectTo: string;
+      user: { id: number; email: string; role: string; emailVerified?: boolean } | null;
+      redirectTo: string;
     }>("/auth/signup", { method: "POST", body: JSON.stringify({ email, username, password }) });
+
+    if (response.accessToken) {
+      await tokenStorage.set(response.accessToken);
+      if (response.refreshToken) await tokenStorage.setRefresh(response.refreshToken);
+    }
+    return response;
+  },
+
+  registerBusiness: async (payload: {
+    email: string;
+    username: string;
+    password: string;
+    phoneNumber: string;
+    location: string;
+    mapsLink?: string;
+    latitude?: number | null;
+    longitude?: number | null;
+  }) => {
+    const response = await apiRequest<{
+      message: string; accessToken: string; refreshToken: string;
+      user: { id: number; email: string; role: string; emailVerified?: boolean } | null;
+      redirectTo: string;
+    }>("/auth/signup", { method: "POST", body: JSON.stringify(payload) });
 
     if (response.accessToken) {
       await tokenStorage.set(response.accessToken);
@@ -126,7 +183,7 @@ export const authApi = {
   getUserByToken: async () =>
     apiRequest<{
       id: number; email: string; username: string; role: string;
-      profileImage?: string; location?: string; mapsLink?: string;
+      profileImage?: string; location?: string; phoneNumber?: string; mapsLink?: string;
     }>("/auth/get-user-by-token"),
 
   googleAuth: async (idToken: string) => {
@@ -154,6 +211,29 @@ export const authApi = {
     }
     return response;
   },
+
+  sendVerificationEmail: async (email: string) =>
+    apiRequest<{ message: string; sent?: boolean }>("/auth/send-verification-email", {
+      method: "POST", body: JSON.stringify({ email }),
+    }),
+
+  verifyEmailCode: async (email: string, code: string) =>
+    apiRequest<{ verified: boolean; message?: string }>("/auth/verify-email-code", {
+      method: "POST", body: JSON.stringify({ email, code }),
+    }),
+
+  forgotPassword: async (email: string) =>
+    apiRequest<{ sent: boolean; message?: string }>("/auth/forgot-password", {
+      method: "POST", body: JSON.stringify({ email }),
+    }),
+
+  resetPassword: async (email: string, code: string, newPassword: string) =>
+    apiRequest<{ reset: boolean; message?: string }>("/auth/reset-password", {
+      method: "POST", body: JSON.stringify({ email, code, newPassword }),
+    }),
+
+  cleanupPartialSignup: async () =>
+    apiRequest<{ message: string }>("/auth/cleanup-partial-signup", { method: "DELETE" }),
 };
 
 // ─── Offers API ────────────────────────────────────────────────────────────────
@@ -195,6 +275,9 @@ export const offersApi = {
 
   delete: async (id: number) =>
     apiRequest<{ message: string }>(`/offers/${id}`, { method: "DELETE" }),
+
+  createRapid: async (data: { title: string; price: number; quantity: number; pickupStartTime?: string; originalPrice?: number }) =>
+    apiRequest<any>("/offers/rapid-minimal", { method: "POST", body: JSON.stringify(data) }),
 };
 
 // ─── Orders API ────────────────────────────────────────────────────────────────
@@ -222,7 +305,7 @@ export const usersApi = {
   getMe: async () => apiRequest<any>("/users/me"),
 
   updateProfile: async (data: {
-    username?: string; location?: string; phoneNumber?: string;
+    username?: string; location?: string; phoneNumber?: string | number;
     profileImage?: string; mapsLink?: string;
   }) => apiRequest<any>("/users/me", { method: "POST", body: JSON.stringify(data) }),
 
@@ -237,28 +320,65 @@ export const usersApi = {
     username?: string; location?: string; longitude?: number;
     latitude?: number; phoneNumber?: string; mapsLink?: string;
   }) => apiRequest<any>("/users/update-details", { method: "POST", body: JSON.stringify(data) }),
+
+  deleteAccount: async (email: string) =>
+    apiRequest<{ message: string }>(`/users/${encodeURIComponent(email)}`, { method: "DELETE" }),
+
+  search: async (name: string) => apiRequest<any[]>(`/users/search?name=${encodeURIComponent(name)}`),
+
+  getProfile: async (id: string | number) => apiRequest<any>(`/users/profile/${id}`),
+
+  reverseGeocode: async (lat: number, lon: number) =>
+    apiRequest<{ city?: string; state?: string; locationName?: string }>(
+      `/users/reverse-geocode?lat=${lat}&lon=${lon}`
+    ),
+};
+
+export const ratingsApi = {
+  getProviderAverage: async (providerId: number) =>
+    apiRequest<{ averageRating?: number; totalRatings?: number }>(
+      `/ratings/provider/${providerId}/average`
+    ),
+};
+
+export const contactApi = {
+  send: async (data: {
+    name: string;
+    email: string;
+    subject?: string;
+    message: string;
+    userRole?: string;
+    userId?: number;
+  }) => apiRequest<{ message: string }>("/contact", { method: "POST", body: JSON.stringify(data) }),
 };
 
 // ─── Storage API ───────────────────────────────────────────────────────────────
 // In React Native, files are URIs (from expo-image-picker), not File objects
 export const storageApi = {
-  upload: async (fileUris: string[]): Promise<Array<{
+  upload: async (
+    files: Array<string | { uri: string; mimeType?: string; fileName?: string }>
+  ): Promise<Array<{
     filename: string; originalName: string | null; path: string;
     url: string; absoluteUrl: string; blurhash?: string; width?: number; height?: number;
   }>> => {
     const token = await tokenStorage.get();
     const formData = new FormData();
 
-    fileUris.forEach((uri, index) => {
-      const filename = uri.split("/").pop() || `image_${index}.jpg`;
-      const match = /\.(\w+)$/.exec(filename);
-      const type = match ? `image/${match[1]}` : "image/jpeg";
-      // React Native FormData accepts { uri, name, type }
-      formData.append("files", { uri, name: filename, type } as any);
-    });
+    for (let index = 0; index < files.length; index++) {
+      const { uri, fileName, mimeType } = normalizeUploadFile(files[index], index);
+
+      if (Platform.OS === "web") {
+        const blob = await fetch(uri).then((res) => res.blob());
+        formData.append("files", new File([blob], fileName, { type: mimeType }));
+      } else {
+        // React Native FormData accepts { uri, name, type }
+        formData.append("files", { uri, name: fileName, type: mimeType } as any);
+      }
+    }
 
     const headers: Record<string, string> = {};
     if (token) headers["Authorization"] = `Bearer ${token}`;
+    // Do not set Content-Type — fetch must add the multipart boundary automatically.
 
     const response = await fetch(`${API_BASE_URL}/storage/upload`, {
       method: "POST",

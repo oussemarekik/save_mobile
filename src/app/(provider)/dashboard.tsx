@@ -1,15 +1,24 @@
 import React, { useState } from "react";
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
-  StyleSheet, ActivityIndicator, Modal, Image, Alert,
+  StyleSheet, ActivityIndicator, Modal, Image,
+  KeyboardAvoidingView, Platform,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { offersApi, ordersApi, storageApi, usersApi, transformOfferToProduct, transformOrder } from "@/lib/api-client";
+import { invalidateOfferQueries, providerOffersKey } from "@/lib/offer-queries";
+import { useDeleteOffer } from "@/hooks/use-delete-offer";
+import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
 import { Ionicons } from "@expo/vector-icons";
 import Toast from "react-native-toast-message";
-import * as ImagePicker from "expo-image-picker";
+import { pickImageFromLibrary } from "@/lib/pick-image";
+import { formatPrice, formatPriceValue } from "@/utils/formatPrice";
+import { useLanguage } from "@/context/LanguageContext";
+import { ProviderPendingBanner } from "@/components/provider/ProviderPendingBanner";
+import { ProviderQRScannerModal } from "@/components/provider/ProviderQRScannerModal";
+import { filterOffers, getOfferStats, type OfferFilter } from "@/utils/offerUtils";
 
 const PRIMARY = "#16a34a";
 type Tab = "overview" | "orders" | "offers";
@@ -19,15 +28,18 @@ export default function ProviderDashboard() {
   const router = useRouter();
   const { user, isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
+  const { t } = useLanguage();
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingOffer, setEditingOffer] = useState<any>(null);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [showQRScanner, setShowQRScanner] = useState(false);
   const [showProfileEdit, setShowProfileEdit] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
+  const [offerSearch, setOfferSearch] = useState("");
+  const [offerFilter, setOfferFilter] = useState<OfferFilter>("all");
 
   const { data: offers, isLoading } = useQuery({
-    queryKey: ["/offers/owner"],
+    queryKey: providerOffersKey(user?.id),
     queryFn: () => offersApi.getByOwner(user?.id || 0),
     enabled: !!user?.id && typeof user.id === "number",
   });
@@ -41,29 +53,63 @@ export default function ProviderDashboard() {
     enabled: isAuthenticated,
   });
 
-  const deleteOfferMutation = useMutation({
-    mutationFn: (id: number) => offersApi.delete(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/offers"] });
-      Toast.show({ type: "success", text1: "Offer deleted", text2: "Your offer has been removed" });
-    },
-  });
+  const deleteOfferMutation = useDeleteOffer();
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
+
+  const promptDeleteOffer = (id: number) => {
+    confirm({
+      title: t("offer_card.confirm_deletion") || "Delete offer?",
+      message:
+        t("offer_card.delete_message") ||
+        "Are you sure you want to delete this offer? This action cannot be undone.",
+      confirmLabel: t("common.delete") || "Delete",
+      cancelLabel: t("common.cancel") || "Cancel",
+      destructive: true,
+      onConfirm: async () => {
+        try {
+          await deleteOfferMutation.mutateAsync(Number(id));
+          Toast.show({
+            type: "success",
+            text1: t("provider.home.offer_deleted"),
+            text2: t("provider.dashboard.offer_deleted_desc"),
+          });
+        } catch (error: any) {
+          Toast.show({
+            type: "error",
+            text1: t("provider.dashboard.delete_failed_title"),
+            text2: error.message || t("provider.dashboard.delete_failed_desc"),
+          });
+          throw error;
+        }
+      },
+    });
+  };
 
   const confirmOrderMutation = useMutation({
     mutationFn: (id: number) => ordersApi.confirm(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/orders"] });
-      Toast.show({ type: "success", text1: "Order confirmed", text2: "Pickup has been confirmed" });
+      Toast.show({
+        type: "success",
+        text1: t("orders.confirmed"),
+        text2: t("provider.dashboard.order_confirmed_desc"),
+      });
       setSelectedOrder(null);
     },
   });
 
+  const tabLabels: Record<Tab, string> = {
+    overview: t("provider.dashboard.tab_overview"),
+    orders: t("provider.dashboard.tab_orders"),
+    offers: t("provider.dashboard.tab_offers"),
+  };
+
   if (!isAuthenticated) {
     return (
       <View style={styles.centered}>
-        <Text style={styles.centeredTitle}>Sign in required</Text>
+        <Text style={styles.centeredTitle}>{t("auth.signInRequired")}</Text>
         <TouchableOpacity style={styles.primaryButton} onPress={() => router.push("/(auth)/signin")}>
-          <Text style={styles.primaryButtonText}>Sign In</Text>
+          <Text style={styles.primaryButtonText}>{t("common.signIn")}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -73,10 +119,10 @@ export default function ProviderDashboard() {
     return (
       <View style={styles.centered}>
         <Ionicons name="cube-outline" size={64} color="#888" />
-        <Text style={styles.centeredTitle}>Provider account required</Text>
-        <Text style={styles.centeredSubtitle}>You need a provider account to access the dashboard</Text>
+        <Text style={styles.centeredTitle}>{t("auth.providerRequired")}</Text>
+        <Text style={styles.centeredSubtitle}>{t("auth.providerRequiredDesc")}</Text>
         <TouchableOpacity style={styles.primaryButton} onPress={() => router.push("/(auth)/ProviderSignup")}>
-          <Text style={styles.primaryButtonText}>Create Provider Account</Text>
+          <Text style={styles.primaryButtonText}>{t("auth.createProviderAccount")}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -87,14 +133,17 @@ export default function ProviderDashboard() {
     (o.status === "confirmed" && o.collectedAt) || o.status === "cancelled" || o.status === "expired"
   ) || [];
   const revenueOrders = orders?.filter((o: any) => o.status === "confirmed" && o.collectedAt) || [];
-  const totalRevenue = revenueOrders.reduce((sum: number, o: any) => sum + (o.totalPrice || 0), 0) / 100;
+  const totalRevenue = revenueOrders.reduce((sum: number, o: any) => sum + (o.totalPrice || 0), 0);
   const completedOrders = pastOrders.length;
+  const isPendingProvider = user?.role === "PENDING_PROVIDER";
+  const offerStats = getOfferStats(offers || []);
+  const displayedOffers = filterOffers(offers || [], offerSearch, offerFilter);
 
   return (
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Dashboard</Text>
+        <Text style={styles.headerTitle}>{t("provider.dashboard.title")}</Text>
         <TouchableOpacity style={styles.addButton} onPress={() => setShowCreateForm(true)}>
           <Ionicons name="add" size={24} color="#fff" />
         </TouchableOpacity>
@@ -109,7 +158,7 @@ export default function ProviderDashboard() {
             style={[styles.tab, activeTab === tab && styles.tabActive]}
           >
             <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
-              {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              {tabLabels[tab]}
             </Text>
           </TouchableOpacity>
         ))}
@@ -120,13 +169,14 @@ export default function ProviderDashboard() {
         {/* ── Overview Tab ── */}
         {activeTab === "overview" && (
           <>
+            {isPendingProvider && <ProviderPendingBanner />}
             {/* Stats Grid */}
             <View style={styles.statsGrid}>
               {[
-                { icon: "cube-outline", color: PRIMARY, value: offers?.length || 0, label: "Active Offers" },
-                { icon: "time-outline", color: "#ea580c", value: activeOrders.length, label: "Pending Orders" },
-                { icon: "cash-outline", color: "#16a34a", value: `$${totalRevenue.toFixed(2)}`, label: "Total Revenue" },
-                { icon: "trending-up-outline", color: "#2563eb", value: completedOrders, label: "Completed Orders" },
+                { icon: "cube-outline", color: PRIMARY, value: offers?.length || 0, label: t("provider.dashboard.active_offers") },
+                { icon: "time-outline", color: "#ea580c", value: activeOrders.length, label: t("provider.dashboard.pending_orders") },
+                { icon: "cash-outline", color: "#16a34a", value: `${formatPriceValue(totalRevenue)} dt`, label: t("provider.dashboard.total_revenue") },
+                { icon: "trending-up-outline", color: "#2563eb", value: completedOrders, label: t("provider.dashboard.completed_orders") },
               ].map((stat) => (
                 <View key={stat.label} style={styles.statCard}>
                   <View style={styles.statRow}>
@@ -139,12 +189,12 @@ export default function ProviderDashboard() {
             </View>
 
             {/* Quick Actions */}
-            <Text style={styles.sectionTitle}>Quick Actions</Text>
+            <Text style={styles.sectionTitle}>{t("provider.dashboard.quick_actions")}</Text>
             <View style={styles.statsGrid}>
               {[
-                { icon: "add-circle-outline", label: "Publish Offer", sub: "Create new offer", onPress: () => setShowCreateForm(true) },
-                { icon: "qr-code-outline", label: "Scan QR Code", sub: "Confirm pickup", onPress: () => setShowQRScanner(true) },
-                { icon: "settings-outline", label: "Edit Profile", sub: "Business info", onPress: () => setShowProfileEdit(true) },
+                { icon: "add-circle-outline", label: t("provider.home.publish_offer"), sub: t("provider.dashboard.publish_offer_sub"), onPress: () => setShowCreateForm(true) },
+                { icon: "qr-code-outline", label: t("provider.scan_qr"), sub: t("provider.dashboard.scan_qr_sub"), onPress: () => setShowQRScanner(true) },
+                { icon: "settings-outline", label: t("provider.profile.edit_profile"), sub: t("provider.dashboard.edit_profile_sub"), onPress: () => setShowProfileEdit(true) },
               ].map((a) => (
                 <TouchableOpacity key={a.label} style={styles.actionCard} onPress={a.onPress} activeOpacity={0.8}>
                   <Ionicons name={a.icon as any} size={24} color={PRIMARY} />
@@ -159,7 +209,7 @@ export default function ProviderDashboard() {
               <>
                 <View style={styles.sectionRow}>
                   <Ionicons name="time-outline" size={18} color="#ea580c" />
-                  <Text style={styles.sectionTitle}>Recent Pending Orders</Text>
+                  <Text style={styles.sectionTitle}>{t("provider.dashboard.recent_pending_orders")}</Text>
                 </View>
                 {activeOrders.slice(0, 3).map((order: any) => (
                   <OrderCard
@@ -171,7 +221,7 @@ export default function ProviderDashboard() {
                 ))}
                 {activeOrders.length > 3 && (
                   <TouchableOpacity onPress={() => setActiveTab("orders")}>
-                    <Text style={styles.viewAll}>View all orders →</Text>
+                    <Text style={styles.viewAll}>{t("provider.dashboard.view_all_orders")}</Text>
                   </TouchableOpacity>
                 )}
               </>
@@ -186,7 +236,7 @@ export default function ProviderDashboard() {
               <>
                 <View style={styles.sectionRow}>
                   <Ionicons name="time-outline" size={18} color="#ea580c" />
-                  <Text style={styles.sectionTitle}>Pending Pickups ({activeOrders.length})</Text>
+                  <Text style={styles.sectionTitle}>{t("provider.dashboard.pending_pickups", { count: activeOrders.length })}</Text>
                 </View>
                 {activeOrders.map((order: any) => (
                   <OrderCard
@@ -203,7 +253,7 @@ export default function ProviderDashboard() {
               <>
                 <View style={styles.sectionRow}>
                   <Ionicons name="checkmark-circle-outline" size={18} color="#16a34a" />
-                  <Text style={styles.sectionTitle}>Completed Orders ({pastOrders.length})</Text>
+                  <Text style={styles.sectionTitle}>{t("provider.dashboard.completed_orders_title", { count: pastOrders.length })}</Text>
                 </View>
                 {pastOrders.map((order: any) => (
                   <TouchableOpacity
@@ -213,14 +263,14 @@ export default function ProviderDashboard() {
                   >
                     <View style={styles.orderCardRow}>
                       <View>
-                        <Text style={styles.orderTitle}>{order.product?.name || order.offer?.title || "Order"}</Text>
+                        <Text style={styles.orderTitle}>{order.product?.name || order.offer?.title || t("provider.dashboard.order_default")}</Text>
                         <Text style={styles.orderSub}>
                           {order.collectedAt
-                            ? `Collected ${new Date(order.collectedAt).toLocaleDateString()}`
-                            : order.status === "cancelled" ? "Cancelled" : "Expired"}
+                            ? t("provider.dashboard.collected", { date: new Date(order.collectedAt).toLocaleDateString() })
+                            : order.status === "cancelled" ? t("provider.dashboard.cancelled") : t("common.expired")}
                         </Text>
                       </View>
-                      <Text style={styles.orderPrice}>${((order.totalPrice || 0) / 100).toFixed(2)}</Text>
+                      <Text style={styles.orderPrice}>{formatPrice(order.totalPrice || 0)}</Text>
                     </View>
                   </TouchableOpacity>
                 ))}
@@ -230,7 +280,7 @@ export default function ProviderDashboard() {
             {activeOrders.length === 0 && pastOrders.length === 0 && (
               <View style={styles.emptyBox}>
                 <Ionicons name="bag-outline" size={48} color="#888" />
-                <Text style={styles.emptyText}>No orders yet</Text>
+                <Text style={styles.emptyText}>{t("provider.dashboard.no_orders")}</Text>
               </View>
             )}
           </>
@@ -239,19 +289,44 @@ export default function ProviderDashboard() {
         {/* ── Offers Tab ── */}
         {activeTab === "offers" && (
           <>
+            <TextInput
+              style={styles.searchInput}
+              value={offerSearch}
+              onChangeText={setOfferSearch}
+              placeholder={t("provider.home.search_placeholder") || "Search offers..."}
+              placeholderTextColor="#888"
+            />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }}>
+              {(
+                [
+                  { key: "all" as OfferFilter, label: `${t("provider.home.filter_all")} (${offerStats.total})` },
+                  { key: "active" as OfferFilter, label: `${t("provider.home.filter_active")} (${offerStats.active})` },
+                  { key: "expired" as OfferFilter, label: `${t("provider.home.filter_expired")} (${offerStats.expired})` },
+                  { key: "low_stock" as OfferFilter, label: `${t("provider.home.filter_low_stock")} (${offerStats.lowStock})` },
+                ]
+              ).map((f) => (
+                <TouchableOpacity
+                  key={f.key}
+                  onPress={() => setOfferFilter(f.key)}
+                  style={[styles.filterChip, offerFilter === f.key && styles.filterChipActive]}
+                >
+                  <Text style={[styles.filterChipText, offerFilter === f.key && styles.filterChipTextActive]}>{f.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
             <View style={styles.sectionRow}>
               <Ionicons name="cube-outline" size={18} color={PRIMARY} />
-              <Text style={styles.sectionTitle}>My Offers ({offers?.length || 0})</Text>
+              <Text style={styles.sectionTitle}>{t("provider.dashboard.my_offers", { count: offers?.length || 0 })}</Text>
               <TouchableOpacity style={styles.smallPrimaryButton} onPress={() => setShowCreateForm(true)}>
                 <Ionicons name="add" size={16} color="#fff" />
-                <Text style={styles.smallPrimaryButtonText}>Publish</Text>
+                <Text style={styles.smallPrimaryButtonText}>{t("provider.dashboard.publish")}</Text>
               </TouchableOpacity>
             </View>
 
             {isLoading ? (
               [1, 2, 3].map((i) => <View key={i} style={styles.skeleton} />)
-            ) : offers && offers.length > 0 ? (
-              offers.map((offer: any) => {
+            ) : displayedOffers.length > 0 ? (
+              displayedOffers.map((offer: any) => {
                 const product = transformOfferToProduct(offer);
                 return (
                   <View key={offer.id} style={styles.offerCard}>
@@ -266,7 +341,7 @@ export default function ProviderDashboard() {
                       <View style={styles.offerInfo}>
                         <Text style={styles.offerTitle}>{product.name}</Text>
                         <Text style={styles.offerSub}>{product.quantity} available</Text>
-                        <Text style={styles.offerPrice}>${(product.price / 100).toFixed(2)}</Text>
+                        <Text style={styles.offerPrice}>{formatPrice(product.price)}</Text>
                       </View>
                     </View>
                     <View style={styles.offerCardBottom}>
@@ -278,12 +353,7 @@ export default function ProviderDashboard() {
                           <Ionicons name="create-outline" size={18} color="#555" />
                         </TouchableOpacity>
                         <TouchableOpacity
-                          onPress={() =>
-                            Alert.alert("Delete offer?", "This cannot be undone.", [
-                              { text: "Cancel", style: "cancel" },
-                              { text: "Delete", style: "destructive", onPress: () => deleteOfferMutation.mutate(offer.id) },
-                            ])
-                          }
+                          onPress={() => promptDeleteOffer(offer.id)}
                           style={styles.iconButton}
                         >
                           <Ionicons name="trash-outline" size={18} color="#ef4444" />
@@ -293,6 +363,10 @@ export default function ProviderDashboard() {
                   </View>
                 );
               })
+            ) : offers && offers.length > 0 ? (
+              <View style={styles.emptyBox}>
+                <Text style={styles.emptyText}>{t("provider.home.no_results") || "No offers match your filters"}</Text>
+              </View>
             ) : (
               <View style={styles.emptyBox}>
                 <Ionicons name="cube-outline" size={48} color="#888" />
@@ -311,14 +385,14 @@ export default function ProviderDashboard() {
       {showCreateForm && (
         <CreateOfferModal
           onClose={() => setShowCreateForm(false)}
-          onSuccess={() => { setShowCreateForm(false); queryClient.invalidateQueries({ queryKey: ["/offers"] }); }}
+          onSuccess={() => { setShowCreateForm(false); invalidateOfferQueries(queryClient); }}
         />
       )}
       {editingOffer && (
         <EditOfferModal
           offer={editingOffer}
           onClose={() => setEditingOffer(null)}
-          onSuccess={() => { setEditingOffer(null); queryClient.invalidateQueries({ queryKey: ["/offers"] }); }}
+          onSuccess={() => { setEditingOffer(null); invalidateOfferQueries(queryClient); }}
         />
       )}
       {selectedOrder && (
@@ -329,12 +403,17 @@ export default function ProviderDashboard() {
         />
       )}
       {showQRScanner && (
-        <QRScannerModal
+        <ProviderQRScannerModal
+          visible={showQRScanner}
           onClose={() => setShowQRScanner(false)}
           onScan={(token) => {
             ordersApi.scan(token)
-              .then(() => { queryClient.invalidateQueries({ queryKey: ["/orders"] }); Toast.show({ type: "success", text1: "Order found" }); })
-              .catch((err) => Toast.show({ type: "error", text1: "Error", text2: err.message }));
+              .then(() => {
+                queryClient.invalidateQueries({ queryKey: ["/orders"] });
+                Toast.show({ type: "success", text1: t("provider.dashboard.order_found") });
+                setShowQRScanner(false);
+              })
+              .catch((err) => Toast.show({ type: "error", text1: t("common.error"), text2: err.message }));
           }}
         />
       )}
@@ -345,24 +424,26 @@ export default function ProviderDashboard() {
           onSuccess={() => { setShowProfileEdit(false); queryClient.invalidateQueries({ queryKey: ["/auth/get-user-by-token"] }); }}
         />
       )}
+      {confirmDialog}
     </View>
   );
 }
 
 // ─── Order Card ────────────────────────────────────────────────────────────────
 function OrderCard({ order, onPress, onConfirm }: { order: any; onPress: () => void; onConfirm: () => void }) {
+  const { t } = useLanguage();
   return (
     <TouchableOpacity style={styles.orderCard} onPress={onPress} activeOpacity={0.8}>
       <View style={styles.orderCardRow}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.orderTitle}>{order.product?.name || order.offer?.title || "Order"}</Text>
-          <Text style={styles.orderSub}>Code: <Text style={styles.mono}>{order.pickupCode || order.id}</Text></Text>
+          <Text style={styles.orderTitle}>{order.product?.name || order.offer?.title || t("provider.dashboard.order_default")}</Text>
+          <Text style={styles.orderSub}>{t("provider.dashboard.pickup_code")}: <Text style={styles.mono}>{order.pickupCode || order.id}</Text></Text>
         </View>
         <Text style={styles.orderPrice}>${((order.totalPrice || 0) / 100).toFixed(2)}</Text>
       </View>
       <View style={styles.orderCardButtons}>
         <TouchableOpacity style={styles.confirmButton} onPress={onConfirm} activeOpacity={0.8}>
-          <Text style={styles.confirmButtonText}>Confirm Pickup</Text>
+          <Text style={styles.confirmButtonText}>{t("provider.dashboard.confirm_pickup")}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.viewButton} onPress={onPress} activeOpacity={0.8}>
           <Ionicons name="eye-outline" size={18} color="#555" />
@@ -373,18 +454,22 @@ function OrderCard({ order, onPress, onConfirm }: { order: any; onPress: () => v
 }
 
 // ─── Shared form helpers ───────────────────────────────────────────────────────
-const FOOD_TYPES = [
-  { label: "Meals", value: "meal" },
-  { label: "Bread & Pastries", value: "snack" },
-  { label: "Beverages", value: "beverage" },
-  { label: "Other", value: "other" },
-];
-const TASTES = [
-  { label: "Neutral", value: "neutral" },
-  { label: "Sweet", value: "sweet" },
-  { label: "Salty", value: "salty" },
-  { label: "Both", value: "both" },
-];
+function getFoodTypes(t: (key: string) => string) {
+  return [
+    { label: t("offer_card.food_type_meal"), value: "meal" },
+    { label: t("offer_card.food_type_snack"), value: "snack" },
+    { label: t("offer_card.food_type_beverage"), value: "beverage" },
+    { label: t("offer_card.food_type_other"), value: "other" },
+  ];
+}
+function getTastes(t: (key: string) => string) {
+  return [
+    { label: t("offer_card.taste_neutral"), value: "neutral" },
+    { label: t("offer_card.taste_sweet"), value: "sweet" },
+    { label: t("offer_card.taste_salty"), value: "salty" },
+    { label: t("offer_card.taste_both"), value: "both" },
+  ];
+}
 
 function parseTime(timeStr: string) {
   const def = { hours: 17, minutes: 0 };
@@ -415,14 +500,22 @@ function extractTime(dt: string | Date | null | undefined, def = "17:00") {
 function BottomSheet({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
   return (
     <Modal visible animationType="slide" transparent onRequestClose={onClose}>
-      <View style={sheet.overlay}>
+      <KeyboardAvoidingView
+        style={sheet.overlay}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
         <TouchableOpacity style={sheet.backdrop} onPress={onClose} activeOpacity={1} />
         <View style={sheet.container}>
-          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          <ScrollView
+            showsVerticalScrollIndicator
+            keyboardShouldPersistTaps="handled"
+            nestedScrollEnabled
+            contentContainerStyle={sheet.scrollContent}
+          >
             {children}
           </ScrollView>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -432,55 +525,58 @@ function OfferForm({ formData, setFormData, imageUri, onPickImage }: {
   formData: any; setFormData: (d: any) => void;
   imageUri: string | null; onPickImage: () => void;
 }) {
+  const { t } = useLanguage();
+  const foodTypes = getFoodTypes(t);
+  const tastes = getTastes(t);
   return (
     <>
-      <Field label="Title">
+      <Field label={t("offer_card.title_label")}>
         <TextInput style={styles.input} value={formData.title}
-          onChangeText={(v) => setFormData({ ...formData, title: v })} placeholder="Magic Bag" />
+          onChangeText={(v) => setFormData({ ...formData, title: v })} placeholder={t("offer_card.title_placeholder")} />
       </Field>
-      <Field label="Description">
+      <Field label={t("offer_card.description_label")}>
         <TextInput style={[styles.input, { height: 80, textAlignVertical: "top" }]}
           value={formData.description} multiline
           onChangeText={(v) => setFormData({ ...formData, description: v })}
-          placeholder="Mixed pastries, sandwiches..." />
+          placeholder={t("offer_card.description_placeholder")} />
       </Field>
       <View style={styles.row}>
         <View style={{ flex: 1 }}>
-          <Field label="Price ($)">
+          <Field label={t("offer_card.price_label")}>
             <TextInput style={styles.input} value={formData.price} keyboardType="decimal-pad"
               onChangeText={(v) => setFormData({ ...formData, price: v })} placeholder="4.99" />
           </Field>
         </View>
         <View style={{ width: 12 }} />
         <View style={{ flex: 1 }}>
-          <Field label="Original Price ($)">
+          <Field label={t("offer_card.original_price_label")}>
             <TextInput style={styles.input} value={formData.originalPrice} keyboardType="decimal-pad"
               onChangeText={(v) => setFormData({ ...formData, originalPrice: v })} placeholder="15.99" />
           </Field>
         </View>
       </View>
-      <Field label="Quantity">
+      <Field label={t("offer_card.quantity_label")}>
         <TextInput style={styles.input} value={String(formData.quantity)} keyboardType="number-pad"
           onChangeText={(v) => setFormData({ ...formData, quantity: v })} placeholder="10" />
       </Field>
       <View style={styles.row}>
         <View style={{ flex: 1 }}>
-          <Field label="Pickup Start">
+          <Field label={t("add_offer.start_time_label")}>
             <TextInput style={styles.input} value={formData.pickupStartTime}
               onChangeText={(v) => setFormData({ ...formData, pickupStartTime: v })} placeholder="17:00" />
           </Field>
         </View>
         <View style={{ width: 12 }} />
         <View style={{ flex: 1 }}>
-          <Field label="Pickup End">
+          <Field label={t("add_offer.end_time_label")}>
             <TextInput style={styles.input} value={formData.pickupEndTime}
               onChangeText={(v) => setFormData({ ...formData, pickupEndTime: v })} placeholder="18:00" />
           </Field>
         </View>
       </View>
-      <Field label="Category">
+      <Field label={t("offer_card.food_type")}>
         <View style={styles.chipRow}>
-          {FOOD_TYPES.map((f) => (
+          {foodTypes.map((f) => (
             <TouchableOpacity key={f.value} onPress={() => setFormData({ ...formData, foodType: f.value })}
               style={[styles.chip, formData.foodType === f.value && styles.chipActive]}>
               <Text style={[styles.chipText, formData.foodType === f.value && styles.chipTextActive]}>{f.label}</Text>
@@ -488,21 +584,21 @@ function OfferForm({ formData, setFormData, imageUri, onPickImage }: {
           ))}
         </View>
       </Field>
-      <Field label="Taste">
+      <Field label={t("offer_card.taste_label")}>
         <View style={styles.chipRow}>
-          {TASTES.map((t) => (
-            <TouchableOpacity key={t.value} onPress={() => setFormData({ ...formData, taste: t.value })}
-              style={[styles.chip, formData.taste === t.value && styles.chipActive]}>
-              <Text style={[styles.chipText, formData.taste === t.value && styles.chipTextActive]}>{t.label}</Text>
+          {tastes.map((taste) => (
+            <TouchableOpacity key={taste.value} onPress={() => setFormData({ ...formData, taste: taste.value })}
+              style={[styles.chip, formData.taste === taste.value && styles.chipActive]}>
+              <Text style={[styles.chipText, formData.taste === taste.value && styles.chipTextActive]}>{taste.label}</Text>
             </TouchableOpacity>
           ))}
         </View>
       </Field>
-      <Field label="Image">
+      <Field label={t("offer_card.images_label")}>
         {imageUri && <Image source={{ uri: imageUri }} style={styles.imagePreview} />}
         <TouchableOpacity style={styles.imagePicker} onPress={onPickImage}>
           <Ionicons name="camera-outline" size={20} color="#555" />
-          <Text style={styles.imagePickerText}>{imageUri ? "Change Image" : "Upload Image"}</Text>
+          <Text style={styles.imagePickerText}>{imageUri ? t("common.edit") : t("offer_card.click_upload")}</Text>
         </TouchableOpacity>
       </Field>
     </>
@@ -520,8 +616,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 // ─── Create Offer Modal ────────────────────────────────────────────────────────
 function CreateOfferModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+  const { t } = useLanguage();
   const [isLoading, setIsLoading] = useState(false);
   const [imageUri, setImageUri] = useState<string | null>(null);
+  const [pickedImage, setPickedImage] = useState<{ uri: string; mimeType?: string; fileName?: string } | null>(null);
   const [formData, setFormData] = useState({
     title: "", description: "", price: "", originalPrice: "",
     quantity: "", pickupStartTime: "17:00", pickupEndTime: "18:00",
@@ -529,57 +627,65 @@ function CreateOfferModal({ onClose, onSuccess }: { onClose: () => void; onSucce
   });
 
   const pickImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 });
-    if (!result.canceled) setImageUri(result.assets[0].uri);
+    const picked = await pickImageFromLibrary();
+    if (picked) {
+      setImageUri(picked.uri);
+      setPickedImage(picked);
+    }
   };
 
   const handleSubmit = async () => {
     setIsLoading(true);
     try {
       let images = "[]";
-      if (imageUri) {
-        const uploadResult = await storageApi.upload([imageUri]);
+      if (pickedImage) {
+        const uploadResult = await storageApi.upload([pickedImage]);
         if (uploadResult?.length) images = JSON.stringify([uploadResult[0]]);
       }
       const data: any = {
         title: formData.title, description: formData.description,
-        price: Math.round(parseFloat(formData.price) * 100),
+        price: parseFloat(formData.price),
         quantity: parseInt(formData.quantity),
         expirationDate: new Date(Date.now() + 86400000).toISOString(),
         pickupStartTime: timeToISO(formData.pickupStartTime),
         pickupEndTime: timeToISO(formData.pickupEndTime),
         foodType: formData.foodType, taste: formData.taste, images,
       };
-      if (formData.originalPrice) data.originalPrice = Math.round(parseFloat(formData.originalPrice) * 100);
+      if (formData.originalPrice) data.originalPrice = parseFloat(formData.originalPrice);
       await offersApi.create(data);
-      Toast.show({ type: "success", text1: "Offer published!", text2: "Your offer is now live" });
+      Toast.show({
+        type: "success",
+        text1: t("provider.dashboard.offer_published"),
+        text2: t("provider.dashboard.offer_published_desc"),
+      });
       onSuccess();
     } catch (e: any) {
-      Toast.show({ type: "error", text1: "Error", text2: e.message || "Failed to create offer" });
+      Toast.show({ type: "error", text1: t("common.error"), text2: e.message || t("provider.dashboard.create_failed") });
     } finally { setIsLoading(false); }
   };
 
   return (
     <BottomSheet onClose={onClose}>
-      <ModalHeader title="Publish New Offer" subtitle="Create and publish a new food offer" onClose={onClose} />
+      <ModalHeader title={t("provider.dashboard.publish_new_offer")} subtitle={t("provider.dashboard.publish_new_offer_sub")} onClose={onClose} />
       <OfferForm formData={formData} setFormData={setFormData} imageUri={imageUri} onPickImage={pickImage} />
       <ModalButtons onCancel={onClose} onSubmit={handleSubmit} isLoading={isLoading}
-        submitLabel="Publish Offer" loadingLabel="Publishing..." />
+        submitLabel={t("provider.home.publish_offer")} loadingLabel={t("provider.dashboard.publishing")} />
     </BottomSheet>
   );
 }
 
 // ─── Edit Offer Modal ──────────────────────────────────────────────────────────
 function EditOfferModal({ offer, onClose, onSuccess }: { offer: any; onClose: () => void; onSuccess: () => void }) {
+  const { t } = useLanguage();
   const product = transformOfferToProduct(offer);
   const [isLoading, setIsLoading] = useState(false);
   const [imageUri, setImageUri] = useState<string | null>(product.imageUrl || null);
-  const [newImage, setNewImage] = useState<string | null>(null);
+  const [newImage, setNewImage] = useState<{ uri: string; mimeType?: string; fileName?: string } | null>(null);
   const [formData, setFormData] = useState({
     title: offer.title || product.name || "",
     description: offer.description || "",
-    price: ((offer.price || product.price || 0) / 100).toFixed(2),
-    originalPrice: ((offer.originalPrice || 0) / 100).toFixed(2),
+    price: String(offer.price || product.price || 0),
+    originalPrice: String(offer.originalPrice || 0),
     quantity: String(offer.quantity || product.quantity || ""),
     pickupStartTime: extractTime(offer.pickupStartTime),
     pickupEndTime: extractTime(offer.pickupEndTime, "18:00"),
@@ -588,8 +694,11 @@ function EditOfferModal({ offer, onClose, onSuccess }: { offer: any; onClose: ()
   });
 
   const pickImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 });
-    if (!result.canceled) { setImageUri(result.assets[0].uri); setNewImage(result.assets[0].uri); }
+    const picked = await pickImageFromLibrary();
+    if (picked) {
+      setImageUri(picked.uri);
+      setNewImage(picked);
+    }
   };
 
   const handleSubmit = async () => {
@@ -602,48 +711,53 @@ function EditOfferModal({ offer, onClose, onSuccess }: { offer: any; onClose: ()
       }
       const data: any = {
         title: formData.title, description: formData.description,
-        price: Math.round(parseFloat(formData.price) * 100),
+        price: parseFloat(formData.price),
         quantity: parseInt(formData.quantity),
         pickupStartTime: timeToISO(formData.pickupStartTime),
         pickupEndTime: timeToISO(formData.pickupEndTime),
         foodType: formData.foodType, taste: formData.taste, images,
       };
-      if (formData.originalPrice) data.originalPrice = Math.round(parseFloat(formData.originalPrice) * 100);
+      if (formData.originalPrice) data.originalPrice = parseFloat(formData.originalPrice);
       await offersApi.update(offer.id, data);
-      Toast.show({ type: "success", text1: "Offer updated!", text2: "Your changes have been saved" });
+      Toast.show({
+        type: "success",
+        text1: t("offer_card.offer_updated"),
+        text2: t("provider.dashboard.offer_updated_desc"),
+      });
       onSuccess();
     } catch (e: any) {
-      Toast.show({ type: "error", text1: "Error", text2: e.message || "Failed to update offer" });
+      Toast.show({ type: "error", text1: t("common.error"), text2: e.message || t("offer_card.update_failed") });
     } finally { setIsLoading(false); }
   };
 
   return (
     <BottomSheet onClose={onClose}>
-      <ModalHeader title="Edit Offer" onClose={onClose} />
+      <ModalHeader title={t("offer_card.edit_offer")} onClose={onClose} />
       <OfferForm formData={formData} setFormData={setFormData} imageUri={imageUri} onPickImage={pickImage} />
       <ModalButtons onCancel={onClose} onSubmit={handleSubmit} isLoading={isLoading}
-        submitLabel="Save Changes" loadingLabel="Saving..." />
+        submitLabel={t("offer_card.save_changes")} loadingLabel={t("offer_card.saving")} />
     </BottomSheet>
   );
 }
 
 // ─── Order Details Modal ───────────────────────────────────────────────────────
 function OrderDetailsModal({ order, onClose, onConfirm }: { order: any; onClose: () => void; onConfirm: (id: number) => void }) {
+  const { t } = useLanguage();
   const product = order.product || order.offer;
   return (
     <Modal visible animationType="fade" transparent onRequestClose={onClose}>
       <View style={sheet.overlay}>
         <View style={[sheet.container, { borderRadius: 20, margin: 16 }]}>
-          <ModalHeader title="Order Details" onClose={onClose} />
+          <ModalHeader title={t("provider.dashboard.order_details")} onClose={onClose} />
           {product?.imageUrl && <Image source={{ uri: product.imageUrl }} style={styles.imagePreview} />}
-          <Text style={styles.orderTitle}>{product?.name || order.offer?.title || "Order"}</Text>
+          <Text style={styles.orderTitle}>{product?.name || order.offer?.title || t("provider.dashboard.order_default")}</Text>
           <Text style={[styles.orderSub, { marginBottom: 16 }]}>{product?.description || order.offer?.description}</Text>
           {[
-            ["Quantity", order.quantity],
-            ["Price", `$${((order.totalPrice || 0) / 100).toFixed(2)}`],
-            ["Status", order.status],
-            ["Pickup Code", order.pickupCode || order.id],
-            ["Order Date", new Date(order.createdAt).toLocaleDateString()],
+            [t("provider.dashboard.quantity"), order.quantity],
+            [t("provider.dashboard.price"), formatPrice(order.totalPrice || 0)],
+            [t("provider.dashboard.status"), order.status],
+            [t("provider.dashboard.pickup_code"), order.pickupCode || order.id],
+            [t("provider.dashboard.order_date"), new Date(order.createdAt).toLocaleDateString()],
           ].map(([k, v]) => (
             <View key={k} style={styles.detailRow}>
               <Text style={styles.detailKey}>{k}</Text>
@@ -652,7 +766,7 @@ function OrderDetailsModal({ order, onClose, onConfirm }: { order: any; onClose:
           ))}
           {order.status === "pending" && (
             <TouchableOpacity style={[styles.primaryButton, { marginTop: 16 }]} onPress={() => onConfirm(order.id)}>
-              <Text style={styles.primaryButtonText}>Confirm Pickup</Text>
+              <Text style={styles.primaryButtonText}>{t("provider.dashboard.confirm_pickup")}</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -661,29 +775,9 @@ function OrderDetailsModal({ order, onClose, onConfirm }: { order: any; onClose:
   );
 }
 
-// ─── QR Scanner Modal ─────────────────────────────────────────────────────────
-function QRScannerModal({ onClose, onScan }: { onClose: () => void; onScan: (token: string) => void }) {
-  const [qrCode, setQrCode] = useState("");
-  return (
-    <Modal visible animationType="fade" transparent onRequestClose={onClose}>
-      <View style={sheet.overlay}>
-        <View style={[sheet.container, { borderRadius: 20, margin: 16 }]}>
-          <ModalHeader title="Scan QR Code" onClose={onClose} />
-          <Field label="Enter QR Code Token">
-            <TextInput style={[styles.input, { fontFamily: "monospace" }]} value={qrCode}
-              onChangeText={setQrCode} placeholder="Scan or enter QR code" autoFocus />
-          </Field>
-          <Text style={styles.hint}>Enter the pickup code from the customer's order</Text>
-          <ModalButtons onCancel={onClose} onSubmit={() => { if (qrCode.trim()) { onScan(qrCode.trim()); onClose(); } }}
-            isLoading={false} submitLabel="Scan" loadingLabel="Scanning..." />
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
-// ─── Profile Edit Modal ────────────────────────────────────────────────────────
+// ─── Order Details Modal ───────────────────────────────────────────────────────
 function ProfileEditModal({ user, onClose, onSuccess }: { user: any; onClose: () => void; onSuccess: () => void }) {
+  const { t } = useLanguage();
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
     username: user?.username || "", location: user?.location || "",
@@ -693,27 +787,37 @@ function ProfileEditModal({ user, onClose, onSuccess }: { user: any; onClose: ()
   const handleSubmit = async () => {
     setIsLoading(true);
     try {
-      const update: any = {};
+      const update: {
+        username?: string;
+        location?: string;
+        phoneNumber?: number;
+        mapsLink?: string;
+      } = {};
       if (formData.username.trim()) update.username = formData.username.trim();
       if (formData.location.trim()) update.location = formData.location.trim();
-      if (formData.phoneNumber.trim()) update.phoneNumber = formData.phoneNumber.trim();
+      const phoneDigits = formData.phoneNumber.replace(/\D/g, "");
+      if (phoneDigits) update.phoneNumber = parseInt(phoneDigits, 10);
       if (formData.mapsLink.trim()) update.mapsLink = formData.mapsLink.trim();
-      await usersApi.updateDetails(update);
-      Toast.show({ type: "success", text1: "Profile updated!", text2: "Your business information has been saved" });
+      await usersApi.updateProfile(update);
+      Toast.show({
+        type: "success",
+        text1: t("provider.profile.edit_dialog.profile_updated"),
+        text2: t("provider.dashboard.profile_updated_desc"),
+      });
       onSuccess();
     } catch (e: any) {
-      Toast.show({ type: "error", text1: "Error", text2: e.message || "Failed to update profile" });
+      Toast.show({ type: "error", text1: t("common.error"), text2: e.message || t("provider.profile.edit_dialog.update_failed") });
     } finally { setIsLoading(false); }
   };
 
   return (
     <BottomSheet onClose={onClose}>
-      <ModalHeader title="Edit Business Profile" onClose={onClose} />
+      <ModalHeader title={t("provider.dashboard.edit_business_profile")} onClose={onClose} />
       {[
-        { label: "Business Name", icon: "person-outline", key: "username", placeholder: "Your business name" },
-        { label: "Address", icon: "location-outline", key: "location", placeholder: "123 Main St..." },
-        { label: "Phone Number", icon: "call-outline", key: "phoneNumber", placeholder: "+1 (555) 123-4567" },
-        { label: "Google Maps Link", icon: "map-outline", key: "mapsLink", placeholder: "https://maps.google.com/..." },
+        { label: t("provider.dashboard.business_name"), icon: "person-outline", key: "username", placeholder: t("provider.dashboard.business_name_placeholder") },
+        { label: t("provider.dashboard.address"), icon: "location-outline", key: "location", placeholder: t("provider.dashboard.address_placeholder") },
+        { label: t("provider.profile.edit_dialog.phone_number"), icon: "call-outline", key: "phoneNumber", placeholder: t("provider.dashboard.phone_placeholder") },
+        { label: t("provider.profile.edit_dialog.maps_link"), icon: "map-outline", key: "mapsLink", placeholder: t("provider.profile.edit_dialog.maps_placeholder") },
       ].map((f) => (
         <Field key={f.key} label={f.label}>
           <View style={styles.inputWrapper}>
@@ -726,7 +830,7 @@ function ProfileEditModal({ user, onClose, onSuccess }: { user: any; onClose: ()
         </Field>
       ))}
       <ModalButtons onCancel={onClose} onSubmit={handleSubmit} isLoading={isLoading}
-        submitLabel="Save Changes" loadingLabel="Saving..." />
+        submitLabel={t("offer_card.save_changes")} loadingLabel={t("offer_card.saving")} />
     </BottomSheet>
   );
 }
@@ -750,10 +854,11 @@ function ModalButtons({ onCancel, onSubmit, isLoading, submitLabel, loadingLabel
   onCancel: () => void; onSubmit: () => void;
   isLoading: boolean; submitLabel: string; loadingLabel: string;
 }) {
+  const { t } = useLanguage();
   return (
     <View style={styles.modalButtons}>
       <TouchableOpacity style={styles.cancelButton} onPress={onCancel}>
-        <Text style={styles.cancelButtonText}>Cancel</Text>
+        <Text style={styles.cancelButtonText}>{t("common.cancel")}</Text>
       </TouchableOpacity>
       <TouchableOpacity style={[styles.primaryButton, { flex: 1 }, isLoading && { opacity: 0.5 }]}
         onPress={onSubmit} disabled={isLoading}>
@@ -843,10 +948,43 @@ const styles = StyleSheet.create({
   detailKey: { color: "#888", fontSize: 14 },
   detailValue: { fontWeight: "600", fontSize: 14, color: "#111" },
   hint: { fontSize: 12, color: "#888", marginBottom: 12 },
+  searchInput: {
+    backgroundColor: "#f5f5f5",
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: "#111",
+    marginBottom: 8,
+  },
+  filterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "#f0f0f0",
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    marginRight: 8,
+  },
+  filterChipActive: { backgroundColor: PRIMARY, borderColor: PRIMARY },
+  filterChipText: { fontSize: 12, fontWeight: "600", color: "#666" },
+  filterChipTextActive: { color: "#fff" },
 });
 
 const sheet = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" },
   backdrop: { ...StyleSheet.absoluteFillObject },
-  container: { backgroundColor: "#fff", borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: "90%", paddingBottom: 0 },
+  container: {
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: "92%",
+    width: "100%",
+  },
+  scrollContent: {
+    padding: 24,
+    paddingBottom: Platform.OS === "ios" ? 40 : 24,
+  },
 });

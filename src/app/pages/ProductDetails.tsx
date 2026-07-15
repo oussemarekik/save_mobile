@@ -7,8 +7,12 @@ import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useProduct, useCreateOrder, useFavorites, useToggleFavorite } from "@/hooks/use-shop";
 import { useAuth } from "@/hooks/use-auth";
+import { useLanguage } from "@/context/LanguageContext";
 import { Ionicons } from "@expo/vector-icons";
 import Toast from "react-native-toast-message";
+import { formatPrice } from "@/utils/formatPrice";
+import { isOfferExpired } from "@/utils/offerUtils";
+import { sanitizeErrorMessage } from "@/utils/errorUtils";
 
 const PRIMARY = "#16a34a";
 
@@ -23,6 +27,7 @@ export default function ProductDetails({ id }: Props) {
 
   const { data: product, isLoading } = useProduct(productId);
   const { isAuthenticated } = useAuth();
+  const { t } = useLanguage();
   const { mutate: createOrder, isPending } = useCreateOrder();
   const { data: favorites } = useFavorites();
   const { mutate: toggleFavorite } = useToggleFavorite();
@@ -53,8 +58,11 @@ export default function ProductDetails({ id }: Props) {
     );
   }
 
-  const price = `$${(product.price / 100).toFixed(2)}`;
-  const originalPrice = `$${(product.originalPrice / 100).toFixed(2)}`;
+  const price = formatPrice(product.price);
+  const originalPrice = formatPrice(product.originalPrice);
+  const isExpired = isOfferExpired(product.expirationDate);
+  const isSoldOut = product.quantity === 0;
+  const canOrder = !isExpired && !isSoldOut;
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
   const handleOrder = () => {
@@ -63,7 +71,15 @@ export default function ProductDetails({ id }: Props) {
       router.push("/(auth)/signin");
       return;
     }
-    if (product.quantity === 0) {
+    if (isExpired) {
+      Toast.show({
+        type: "error",
+        text1: t("common.expired") || "Expired",
+        text2: t("client.offers.detail.expired_cannot_order") || "This offer has expired and cannot be ordered.",
+      });
+      return;
+    }
+    if (isSoldOut) {
       Toast.show({ type: "error", text1: "Sold out", text2: "This offer is no longer available" });
       return;
     }
@@ -74,8 +90,12 @@ export default function ProductDetails({ id }: Props) {
           Toast.show({ type: "success", text1: "Order placed!", text2: "Your order has been placed successfully" });
           setTimeout(() => router.push("/(client)/orders"), 1000);
         },
-        onError: (error: any) => {
-          Toast.show({ type: "error", text1: "Error", text2: error?.response?.data?.message || error?.message || "Failed to place order" });
+        onError: (error: unknown) => {
+          Toast.show({
+            type: "error",
+            text1: "Error",
+            text2: sanitizeErrorMessage(error, { defaultMessage: "Failed to place order" }),
+          });
         },
       }
     );
@@ -208,7 +228,7 @@ export default function ProductDetails({ id }: Props) {
           <TouchableOpacity style={styles.mapPlaceholder} onPress={handleDirections} activeOpacity={0.85}>
             <Image
               source={{ uri: "https://mt1.google.com/vt/lyrs=m&x=13&y=24&z=5" }}
-              style={[StyleSheet.absoluteFillObject, { opacity: 0.5 }]}
+              style={[StyleSheet.absoluteFill, { opacity: 0.5 }]}
               resizeMode="cover"
             />
             <View style={styles.directionsButton}>
@@ -224,10 +244,10 @@ export default function ProductDetails({ id }: Props) {
         <TouchableOpacity
           style={[
             styles.orderButton,
-            (product.quantity === 0 || isPending) && styles.orderButtonDisabled,
+            (!canOrder || isPending) && styles.orderButtonDisabled,
           ]}
           onPress={handleOrder}
-          disabled={product.quantity === 0 || isPending}
+          disabled={!canOrder || isPending}
           activeOpacity={0.85}
         >
           {isPending ? (
@@ -235,6 +255,8 @@ export default function ProductDetails({ id }: Props) {
               <ActivityIndicator color="#fff" size="small" />
               <Text style={styles.orderButtonText}>Ordering...</Text>
             </>
+          ) : isExpired ? (
+            <Text style={styles.orderButtonText}>{t("common.expired") || "Expired"}</Text>
           ) : product.quantity > 0 ? (
             <>
               <Ionicons name="bag-outline" size={20} color="#fff" />
@@ -258,7 +280,7 @@ const styles = StyleSheet.create({
   heroContainer: { height: 280, width: "100%" },
   heroImage: { width: "100%", height: "100%" },
   heroOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(0,0,0,0.35)",
   },
   heroActions: {

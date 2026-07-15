@@ -1,26 +1,25 @@
-import React, { useState, useEffect } from "react";
+import React from "react";
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  TextInput,
-  Modal,
-  ActivityIndicator,
-  Alert,
   Platform,
-  KeyboardAvoidingView,
-  Animated,
-  Dimensions,
   Linking,
   Image,
 } from "react-native";
 import { useAuth } from "@/hooks/use-auth";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { usersApi } from "@/lib/api-client";
-import { useToast } from "@/hooks/use-toast";
+import { useQuery } from "@tanstack/react-query";
+import { ratingsApi } from "@/lib/api-client";
+import { useToast } from "@/lib/toast";
 import { useRouter } from "expo-router";
+import { useLanguage } from "@/context/LanguageContext";
+import { useProviderStats } from "@/hooks/use-provider-stats";
+import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
+import { ProviderPendingBanner } from "@/components/provider/ProviderPendingBanner";
+import { ProfileCompletionBanner } from "@/components/provider/ProfileCompletionBanner";
+import { formatPriceValue } from "@/utils/formatPrice";
 
 import {
   User,
@@ -31,9 +30,12 @@ import {
   ArrowLeft,
   X,
   Store,
+  ChevronRight,
+  Heart,
+  HelpCircle,
+  Leaf,
+  MessageCircle,
 } from "lucide-react-native";
-
-const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 // ---------------------------------------------------------------------------
 // Theme (light)
@@ -57,31 +59,45 @@ const theme = {
 // ProviderProfile
 // ---------------------------------------------------------------------------
 export default function ProviderProfile() {
-  const { user, logout, isAuthenticated } = useAuth();
+  const { user, logoutAsync, isAuthenticated } = useAuth();
   const { toast } = useToast();
+  const { t } = useLanguage();
   const router = useRouter();
-  const queryClient = useQueryClient();
-  const [showEditModal, setShowEditModal] = useState(false);
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
+  const { stats, isLoading: statsLoading } = useProviderStats();
+
+  const { data: rating } = useQuery({
+    queryKey: ["/ratings/provider", user?.id],
+    queryFn: () => ratingsApi.getProviderAverage(user?.id || 0),
+    enabled: !!user?.id,
+  });
+
+  const isPendingProvider = user?.role === "PENDING_PROVIDER";
 
   const handleSignOut = () => {
-    Alert.alert("Sign Out", "Are you sure you want to sign out?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Sign Out",
-        style: "destructive",
-        onPress: () => {
-          logout();
-          toast({ title: "Signed out", description: "You've been signed out successfully" });
-          router.replace("/signin");
-        },
+    confirm({
+      title: t("auth.signOutConfirmTitle"),
+      message: t("auth.signOutConfirmMessage"),
+      confirmLabel: t("common.signOut"),
+      cancelLabel: t("common.cancel"),
+      destructive: true,
+      icon: "log-out-outline",
+      onConfirm: async () => {
+        await logoutAsync();
+        if (Platform.OS === "web" && typeof window !== "undefined") {
+          window.location.assign("/signin");
+          return;
+        }
+        toast({ title: t("auth.signedOut"), description: t("auth.signedOutSuccess") });
+        router.replace("/(auth)/signin");
       },
-    ]);
+    });
   };
 
   if (!isAuthenticated) {
     return (
       <View style={styles.centered}>
-        <Text style={styles.heading}>Sign in required</Text>
+        <Text style={styles.heading}>{t("auth.signInRequired")}</Text>
       </View>
     );
   }
@@ -90,12 +106,12 @@ export default function ProviderProfile() {
     return (
       <View style={styles.centered}>
         <Store color={theme.muted} size={64} />
-        <Text style={[styles.heading, { marginTop: 16 }]}>Provider account required</Text>
+        <Text style={[styles.heading, { marginTop: 16 }]}>{t("auth.providerRequired")}</Text>
       </View>
     );
   }
 
-  const displayName = user?.username || user?.email || "Provider";
+  const displayName = user?.username || user?.email || t("offer_card.provider");
   const initials = displayName
     .split(" ")
     .map((n: string) => n[0])
@@ -104,7 +120,8 @@ export default function ProviderProfile() {
     .slice(0, 2);
 
   return (
-    <View style={styles.screen}>
+    <>
+      <View style={styles.screen}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
@@ -113,10 +130,17 @@ export default function ProviderProfile() {
         >
           <ArrowLeft color={theme.text} size={20} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Profile</Text>
+        <Text style={styles.headerTitle}>{t("profile.title")}</Text>
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {isPendingProvider && <ProviderPendingBanner />}
+
+        <ProfileCompletionBanner
+          profile={user}
+          onEditProfile={() => router.push("/account-details" as any)}
+        />
+
         {/* User Info Card */}
         <View style={styles.profileCard}>
           <View style={styles.avatarWrap}>
@@ -133,60 +157,126 @@ export default function ProviderProfile() {
           <View style={styles.profileInfo}>
             <Text style={styles.profileName}>{displayName}</Text>
             <Text style={styles.profileEmail}>{user?.email}</Text>
-            <Text style={styles.profileBadge}>Provider Account</Text>
+            <Text style={styles.profileBadge}>
+              {isPendingProvider ? t("profile.pending_provider") : t("profile.provider_account")}
+            </Text>
+            {rating?.averageRating != null && (
+              <Text style={styles.ratingText}>★ {Number(rating.averageRating).toFixed(1)} ({rating.totalRatings || 0})</Text>
+            )}
           </View>
         </View>
 
+        {/* Impact Stats */}
+        <View style={styles.statsGrid}>
+          <StatCard
+            icon={<Store color="#047857" size={20} />}
+            value={statsLoading ? "..." : String(stats.totalOffers)}
+            label={t("provider.profile.active_offers") || "Active Offers"}
+            color="#ecfdf5"
+          />
+          <StatCard
+            icon={<Heart color="#1d4ed8" size={20} />}
+            value={statsLoading ? "..." : String(stats.totalMealsSaved)}
+            label={t("provider.profile.meals_saved") || "Meals Saved"}
+            color="#eff6ff"
+          />
+          <StatCard
+            icon={<User color="#b45309" size={20} />}
+            value={statsLoading ? "..." : `${formatPriceValue(stats.revenue)} dt`}
+            label={t("provider.profile.total_revenue") || "Revenue"}
+            color="#fffbeb"
+          />
+        </View>
+
+        {/* Environmental impact */}
+        {stats.totalMealsSaved > 0 && (
+          <View style={styles.impactCard}>
+            <Leaf color="#16a34a" size={20} />
+            <Text style={styles.impactText}>
+              {t("profile.impact_summary", {
+                co2: stats.co2Saved.toFixed(1),
+                water: stats.waterSaved.toLocaleString(),
+              })}
+            </Text>
+          </View>
+        )}
+
+        {/* Menu */}
+        <Text style={styles.sectionTitle}>{t("profile.title") || "Settings"}</Text>
+        <View style={styles.menuCard}>
+          <MenuItem icon={<User color={theme.muted} size={18} />} label={t("profile.accountDetails") || "Account Details"} onPress={() => router.push("/account-details" as any)} />
+          <MenuItem icon={<Settings color={theme.muted} size={18} />} label={t("profile.preferences") || "Preferences"} onPress={() => router.push("/preferences" as any)} />
+          <MenuItem icon={<HelpCircle color={theme.muted} size={18} />} label={t("profile.helpSupport") || "Help & Support"} onPress={() => router.push("/help-support" as any)} />
+          <MenuItem icon={<MessageCircle color={theme.muted} size={18} />} label={t("contact.title") || "Contact"} onPress={() => router.push("/contact" as any)} />
+          <MenuItem icon={<Leaf color={theme.muted} size={18} />} label={t("impact.title") || "Impact"} onPress={() => router.push("/impact" as any)} isLast />
+        </View>
+
         {/* Business Information */}
-        <Text style={styles.sectionTitle}>Business Information</Text>
+        <Text style={styles.sectionTitle}>{t("profile.business_information")}</Text>
         <View style={styles.infoCard}>
           {user?.username && (
-            <InfoRow icon={<Store color={theme.muted} size={18} />} label="Business Name" value={user.username} />
+            <InfoRow icon={<Store color={theme.muted} size={18} />} label={t("profile.business_name")} value={user.username} />
           )}
           {user?.location && (
-            <InfoRow icon={<MapPin color={theme.muted} size={18} />} label="Address" value={user.location} />
+            <InfoRow icon={<MapPin color={theme.muted} size={18} />} label={t("profile.address")} value={user.location} />
           )}
           {user?.phoneNumber && (
-            <InfoRow icon={<Phone color={theme.muted} size={18} />} label="Phone" value={String(user.phoneNumber)} />
+            <InfoRow icon={<Phone color={theme.muted} size={18} />} label={t("profile.phone")} value={String(user.phoneNumber)} />
           )}
           {user?.mapsLink && (
             <InfoRow
               icon={<MapPin color={theme.muted} size={18} />}
-              label="Google Maps"
-              value="View on Maps"
-              onPress={() => Linking.openURL(user.mapsLink)}
+              label={t("profile.google_maps")}
+              value={t("common.view_on_maps")}
+              onPress={() => user.mapsLink && Linking.openURL(user.mapsLink)}
               isLink
             />
           )}
           {!user?.username && !user?.location && !user?.phoneNumber && !user?.mapsLink && (
-            <Text style={styles.emptyInfo}>No business information added yet.</Text>
+            <Text style={styles.emptyInfo}>{t("profile.no_business_info")}</Text>
           )}
         </View>
 
         {/* Edit button */}
-        <TouchableOpacity style={styles.editBtn} onPress={() => setShowEditModal(true)}>
+        <TouchableOpacity style={styles.editBtn} onPress={() => router.push("/account-details" as any)}>
           <Settings color={theme.text} size={20} />
-          <Text style={styles.editBtnText}>Edit Business Information</Text>
+          <Text style={styles.editBtnText}>{t("profile.edit_business_info")}</Text>
         </TouchableOpacity>
 
         {/* Sign Out */}
         <TouchableOpacity style={styles.signOutBtn} onPress={handleSignOut}>
           <LogOut color={theme.destructive} size={20} />
-          <Text style={styles.signOutText}>Sign Out</Text>
+          <Text style={styles.signOutText}>{t("common.signOut")}</Text>
         </TouchableOpacity>
       </ScrollView>
+      </View>
+      {confirmDialog}
+    </>
+  );
+}
 
-      {/* Edit Modal */}
-      <EditProfileModal
-        visible={showEditModal}
-        user={user}
-        onClose={() => setShowEditModal(false)}
-        onSuccess={() => {
-          setShowEditModal(false);
-          queryClient.invalidateQueries({ queryKey: ["/auth/get-user-by-token"] });
-        }}
-      />
+// ---------------------------------------------------------------------------
+// StatCard / MenuItem
+// ---------------------------------------------------------------------------
+function StatCard({ icon, value, label, color }: { icon: React.ReactNode; value: string; label: string; color: string }) {
+  return (
+    <View style={[styles.statCard, { backgroundColor: color }]}>
+      {icon}
+      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
     </View>
+  );
+}
+
+function MenuItem({ icon, label, onPress, isLast }: { icon: React.ReactNode; label: string; onPress: () => void; isLast?: boolean }) {
+  return (
+    <TouchableOpacity style={[styles.menuItem, isLast && { borderBottomWidth: 0 }]} onPress={onPress}>
+      <View style={styles.menuItemLeft}>
+        {icon}
+        <Text style={styles.menuItemText}>{label}</Text>
+      </View>
+      <ChevronRight color={theme.muted} size={18} />
+    </TouchableOpacity>
   );
 }
 
@@ -221,177 +311,6 @@ function InfoRow({
         <Text style={[styles.infoValue, isLink && { color: theme.primary }]}>{value}</Text>
       </View>
     </Wrap>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// EditProfileModal
-// ---------------------------------------------------------------------------
-function EditProfileModal({
-  visible,
-  user,
-  onClose,
-  onSuccess,
-}: {
-  visible: boolean;
-  user: any;
-  onClose: () => void;
-  onSuccess: () => void;
-}) {
-  const { toast } = useToast();
-  const [isLoading, setIsLoading] = useState(false);
-  const slideAnim = useState(new Animated.Value(SCREEN_HEIGHT))[0];
-
-  const [form, setForm] = useState({
-    username: user?.username || "",
-    location: user?.location || "",
-    phoneNumber: user?.phoneNumber?.toString() || "",
-    mapsLink: user?.mapsLink || "",
-  });
-
-  useEffect(() => {
-    if (visible) {
-      Animated.spring(slideAnim, {
-        toValue: 0,
-        useNativeDriver: true,
-        damping: 20,
-        stiffness: 150,
-      }).start();
-    } else {
-      Animated.timing(slideAnim, {
-        toValue: SCREEN_HEIGHT,
-        duration: 250,
-        useNativeDriver: true,
-      }).start();
-    }
-  }, [visible]);
-
-  const set = (key: string) => (val: string) => setForm((f) => ({ ...f, [key]: val }));
-
-  const handleSubmit = async () => {
-    setIsLoading(true);
-    try {
-      const updateData: any = {};
-      if (form.username.trim()) updateData.username = form.username.trim();
-      if (form.location.trim()) updateData.location = form.location.trim();
-      if (form.phoneNumber.trim()) updateData.phoneNumber = form.phoneNumber.trim();
-      if (form.mapsLink.trim()) updateData.mapsLink = form.mapsLink.trim();
-
-      await usersApi.updateDetails(updateData);
-      toast({ title: "Profile updated!", description: "Your business information has been saved" });
-      onSuccess();
-    } catch (error: any) {
-      toast({ title: "Error", description: error.message || "Failed to update profile" });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
-      <View style={styles.overlay}>
-        <TouchableOpacity style={StyleSheet.absoluteFill} onPress={onClose} />
-        <Animated.View style={[styles.sheet, { transform: [{ translateY: slideAnim }] }]}>
-          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
-            <ScrollView showsVerticalScrollIndicator={false}>
-              {/* Header */}
-              <View style={styles.sheetHeader}>
-                <Text style={styles.sheetTitle}>Edit Business Profile</Text>
-                <TouchableOpacity style={styles.iconBtn} onPress={onClose}>
-                  <X color={theme.text} size={20} />
-                </TouchableOpacity>
-              </View>
-
-              {/* Business Name */}
-              <View style={styles.field}>
-                <View style={styles.labelRow}>
-                  <Store color={theme.textMuted} size={14} />
-                  <Text style={styles.label}>Business Name</Text>
-                </View>
-                <TextInput
-                  style={styles.input}
-                  value={form.username}
-                  onChangeText={set("username")}
-                  placeholder="Your business name"
-                  placeholderTextColor={theme.muted}
-                />
-              </View>
-
-              {/* Address */}
-              <View style={styles.field}>
-                <View style={styles.labelRow}>
-                  <MapPin color={theme.textMuted} size={14} />
-                  <Text style={styles.label}>Address</Text>
-                </View>
-                <TextInput
-                  style={styles.input}
-                  value={form.location}
-                  onChangeText={set("location")}
-                  placeholder="123 Main St, City, State ZIP"
-                  placeholderTextColor={theme.muted}
-                />
-              </View>
-
-              {/* Phone */}
-              <View style={styles.field}>
-                <View style={styles.labelRow}>
-                  <Phone color={theme.textMuted} size={14} />
-                  <Text style={styles.label}>Phone Number</Text>
-                </View>
-                <TextInput
-                  style={styles.input}
-                  value={form.phoneNumber}
-                  onChangeText={set("phoneNumber")}
-                  placeholder="+1 (555) 123-4567"
-                  placeholderTextColor={theme.muted}
-                  keyboardType="phone-pad"
-                />
-              </View>
-
-              {/* Maps Link */}
-              <View style={styles.field}>
-                <View style={styles.labelRow}>
-                  <MapPin color={theme.textMuted} size={14} />
-                  <Text style={styles.label}>Google Maps Link</Text>
-                </View>
-                <TextInput
-                  style={styles.input}
-                  value={form.mapsLink}
-                  onChangeText={set("mapsLink")}
-                  placeholder="https://maps.google.com/..."
-                  placeholderTextColor={theme.muted}
-                  keyboardType="url"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                <Text style={styles.hint}>Help customers find your location easily</Text>
-              </View>
-
-              {/* Buttons */}
-              <View style={styles.btnRow}>
-                <TouchableOpacity style={[styles.btnSecondary, { flex: 1 }]} onPress={onClose}>
-                  <Text style={styles.btnSecondaryText}>Cancel</Text>
-                </TouchableOpacity>
-                <View style={{ width: 12 }} />
-                <TouchableOpacity
-                  style={[styles.btnPrimary, { flex: 1 }, isLoading && styles.btnDisabled]}
-                  onPress={handleSubmit}
-                  disabled={isLoading}
-                >
-                  {isLoading ? (
-                    <ActivityIndicator color={theme.primaryForeground} size="small" />
-                  ) : (
-                    <Text style={styles.btnPrimaryText}>Save Changes</Text>
-                  )}
-                </TouchableOpacity>
-              </View>
-
-              <View style={{ height: 32 }} />
-            </ScrollView>
-          </KeyboardAvoidingView>
-        </Animated.View>
-      </View>
-    </Modal>
   );
 }
 
@@ -499,6 +418,75 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginTop: 2,
   },
+  ratingText: {
+    color: "#b45309",
+    fontSize: 12,
+    fontWeight: "600",
+    marginTop: 4,
+  },
+  statsGrid: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  statCard: {
+    flex: 1,
+    borderRadius: 14,
+    padding: 12,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  statValue: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: theme.text,
+  },
+  statLabel: {
+    fontSize: 10,
+    color: theme.textMuted,
+    fontWeight: "600",
+  },
+  impactCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "#f0fdf4",
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#bbf7d0",
+  },
+  impactText: {
+    flex: 1,
+    fontSize: 13,
+    color: "#166534",
+    fontWeight: "500",
+  },
+  menuCard: {
+    backgroundColor: theme.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: theme.border,
+    overflow: "hidden",
+  },
+  menuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.border,
+  },
+  menuItemLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  menuItemText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: theme.text,
+  },
 
   // Section
   sectionTitle: {
@@ -583,98 +571,5 @@ const styles = StyleSheet.create({
     color: theme.destructive,
     fontSize: 15,
     fontWeight: "600",
-  },
-
-  // Bottom sheet
-  overlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.4)",
-    justifyContent: "flex-end",
-  },
-  sheet: {
-    backgroundColor: theme.background,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    maxHeight: SCREEN_HEIGHT * 0.92,
-    padding: 24,
-    paddingBottom: Platform.OS === "ios" ? 40 : 24,
-  },
-  sheetHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 24,
-  },
-  sheetTitle: {
-    color: theme.text,
-    fontSize: 20,
-    fontWeight: "700",
-    letterSpacing: -0.3,
-  },
-
-  // Form
-  field: {
-    marginBottom: 16,
-  },
-  labelRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginBottom: 6,
-  },
-  label: {
-    color: theme.text,
-    fontSize: 13,
-    fontWeight: "500",
-  },
-  input: {
-    backgroundColor: theme.secondary,
-    borderWidth: 1,
-    borderColor: theme.border,
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    color: theme.text,
-    fontSize: 15,
-  },
-  hint: {
-    color: theme.textMuted,
-    fontSize: 12,
-    marginTop: 4,
-  },
-
-  // Buttons
-  btnRow: {
-    flexDirection: "row",
-    marginTop: 8,
-  },
-  btnPrimary: {
-    paddingVertical: 14,
-    borderRadius: 14,
-    backgroundColor: theme.primary,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  btnPrimaryText: {
-    color: theme.primaryForeground,
-    fontWeight: "700",
-    fontSize: 15,
-  },
-  btnSecondary: {
-    paddingVertical: 14,
-    borderRadius: 14,
-    backgroundColor: theme.secondary,
-    borderWidth: 1,
-    borderColor: theme.border,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  btnSecondaryText: {
-    color: theme.text,
-    fontWeight: "500",
-    fontSize: 15,
-  },
-  btnDisabled: {
-    opacity: 0.5,
   },
 });

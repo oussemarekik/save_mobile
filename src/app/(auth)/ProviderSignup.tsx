@@ -1,298 +1,460 @@
-import React, { useState } from "react";
-import { useLocation, Link } from "wouter";
-import { usersApi, authApi } from "@/lib/api-client";
+import React, { useState, useEffect } from "react";
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ScrollView,
+  KeyboardAvoidingView,
+  Platform,
+  ActivityIndicator,
+} from "react-native";
+import { useRouter, Link, Redirect } from "expo-router";
+import { authApi, usersApi, tokenStorage } from "@/lib/api-client";
 import { useAuth } from "@/hooks/use-auth";
-import { useToast } from "@/hooks/use-toast";
-import { Store, MapPin, Phone, ArrowLeft, CheckCircle2 } from "lucide-react";
-import { motion } from "framer-motion";
-import { useQueryClient } from "@tanstack/react-query";
+import { useLanguage } from "@/context/LanguageContext";
+import { Ionicons } from "@expo/vector-icons";
+import { theme } from "@/lib/theme";
+import Toast from "react-native-toast-message";
+import { sanitizeErrorMessage } from "@/utils/errorUtils";
+import { writeAuthIntentRole } from "@/lib/authIntent";
+
+function normalizePhoneNumber(value: string) {
+  return value.replace(/\D/g, "");
+}
+
+function generateMapsLink(locationName: string, businessName?: string): string {
+  const query = businessName
+    ? `${encodeURIComponent(businessName)} ${encodeURIComponent(locationName)}`
+    : encodeURIComponent(locationName);
+  return `https://www.google.com/maps/search/?api=1&query=${query}`;
+}
 
 export default function ProviderSignup() {
-  const [, setLocation] = useLocation();
-  const { toast } = useToast();
-  const { user, isAuthenticated } = useAuth();
-  const queryClient = useQueryClient();
-  const [isLoading, setIsLoading] = useState(false);
-  const [step, setStep] = useState(1);
+  const router = useRouter();
+  const { t } = useLanguage();
+  const { user, isLoading: authLoading, refreshAuth } = useAuth();
+
+  const [loading, setLoading] = useState(false);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [termsAccepted, setTermsAccepted] = useState(false);
+
+  useEffect(() => {
+    writeAuthIntentRole("PROVIDER");
+  }, []);
+
   const [formData, setFormData] = useState({
-    username: "",
+    businessName: "",
     location: "",
-    phoneNumber: "",
     mapsLink: "",
+    email: "",
+    phoneNumber: "",
+    password: "",
+    confirmPassword: "",
   });
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    setIsLoading(true);
+  const updateField = (name: keyof typeof formData, value: string) => {
+    setFormData((prev) => {
+      const next = { ...prev, [name]: value };
+      if (name === "location" && value.trim()) {
+        next.mapsLink = generateMapsLink(value.trim(), prev.businessName);
+      }
+      if (name === "businessName" && prev.location.trim()) {
+        next.mapsLink = generateMapsLink(prev.location.trim(), value.trim());
+      }
+      return next;
+    });
+    setErrorMessage("");
+  };
+
+  const validateForm = () => {
+    const normalizedPhone = normalizePhoneNumber(formData.phoneNumber);
+
+    if (!formData.businessName.trim()) {
+      setErrorMessage("Business name is required. Please enter your business name.");
+      return false;
+    }
+    if (formData.businessName.trim().length < 2) {
+      setErrorMessage("Business name must be at least 2 characters long.");
+      return false;
+    }
+    if (formData.businessName.trim().length > 100) {
+      setErrorMessage("Business name is too long. Please enter a maximum of 100 characters.");
+      return false;
+    }
+    if (!formData.location.trim()) {
+      setErrorMessage("Business location is required. Please enter your business address.");
+      return false;
+    }
+    if (formData.location.trim().length < 5) {
+      setErrorMessage("Location is too short. Please enter a complete address.");
+      return false;
+    }
+    if (!formData.email.trim()) {
+      setErrorMessage("Email is required for business account creation.");
+      return false;
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(formData.email.trim())) {
+      setErrorMessage("Invalid email format. Please enter a valid email address.");
+      return false;
+    }
+    if (!normalizedPhone) {
+      setErrorMessage("Phone number is required. Please enter your business phone number.");
+      return false;
+    }
+    if (normalizedPhone.length < 8) {
+      setErrorMessage("Phone number is too short. Please enter at least 8 digits.");
+      return false;
+    }
+    if (normalizedPhone.length > 15) {
+      setErrorMessage("Phone number is too long. Please enter maximum 15 digits.");
+      return false;
+    }
+    if (formData.password.length < 8) {
+      setErrorMessage("Password must be at least 8 characters long.");
+      return false;
+    }
+    if (formData.password.length > 128) {
+      setErrorMessage("Password is too long. Maximum 128 characters.");
+      return false;
+    }
+    if (formData.password !== formData.confirmPassword) {
+      setErrorMessage("Passwords do not match. Please confirm your password carefully.");
+      return false;
+    }
+    if (!termsAccepted) {
+      setErrorMessage(t("business_signup.error_terms"));
+      return false;
+    }
+    return true;
+  };
+
+  const handleSubmit = async () => {
+    if (!validateForm()) return;
+
+    setLoading(true);
+    setErrorMessage("");
+
+    let createdUser = false;
+    let hadToken = false;
+
     try {
-      // Only authenticated users can become providers
-      if (!isAuthenticated) {
-        toast({
-          title: "Sign in required",
-          description: "Please sign in first to create a provider account",
-          variant: "destructive",
-        });
-        setLocation("/signin");
-        setIsLoading(false);
-        return;
-      }
+      const normalizedPhone = normalizePhoneNumber(formData.phoneNumber);
+      const phoneForBackend =
+        normalizedPhone.length > 10 ? normalizedPhone.slice(-10) : normalizedPhone;
 
-      // First, request provider status via the backend
+      const signupResponse = await authApi.registerBusiness({
+        email: formData.email.trim(),
+        phoneNumber: phoneForBackend,
+        password: formData.password,
+        username: formData.businessName.trim(),
+        location: formData.location.trim(),
+        mapsLink: formData.mapsLink.trim(),
+      });
+
+      if (!signupResponse.accessToken) throw new Error("Invalid response from server");
+
+      createdUser = true;
+      hadToken = true;
+
       await usersApi.setRole("PROVIDER");
-      
-      // Then update user details (only include fields with values)
-      const updateData: any = {};
-      if (formData.username && formData.username.trim()) {
-        updateData.username = formData.username.trim();
-      }
-      if (formData.location && formData.location.trim()) {
-        updateData.location = formData.location.trim();
-      }
-      if (formData.phoneNumber && formData.phoneNumber.trim()) {
-        updateData.phoneNumber = formData.phoneNumber.trim();
-      }
-      if (formData.mapsLink && formData.mapsLink.trim()) {
-        updateData.mapsLink = formData.mapsLink.trim();
-      }
-      
-      await usersApi.updateDetails(updateData);
-
-      await queryClient.invalidateQueries({ queryKey: ["/auth/get-user-by-token"] });
-
-      toast({
-        title: "Request submitted!",
-        description: "Your request to become a provider has been submitted and is pending approval",
-        className: "bg-primary text-primary-foreground border-none",
+      await usersApi.updateDetails({
+        phoneNumber: phoneForBackend,
+        mapsLink: formData.mapsLink.trim(),
+        location: formData.location.trim(),
       });
 
-      setLocation("/profile");
-    } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to create provider account",
-        variant: "destructive",
+      const authedUser = await refreshAuth();
+      setShowSuccess(true);
+
+      setTimeout(() => {
+        if (
+          authedUser?.role === "PROVIDER" ||
+          authedUser?.role === "PENDING_PROVIDER"
+        ) {
+          router.replace("/(provider)/dashboard");
+        } else {
+          router.replace("/");
+        }
+      }, 2000);
+    } catch (err: any) {
+      if (createdUser && hadToken) {
+        try {
+          await tokenStorage.remove();
+          await authApi.cleanupPartialSignup();
+        } catch {
+          // best-effort cleanup
+        }
+      }
+      const msg = sanitizeErrorMessage(err, {
+        action: "create business account",
+        defaultMessage: t("business_signup.error_generic"),
       });
+      setErrorMessage(msg);
+      Toast.show({ type: "error", text1: t("common.error"), text2: msg });
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
-  // Redirect to sign in if not authenticated
-  if (!isAuthenticated) {
+  if (authLoading) {
     return (
-      <div className="min-h-screen bg-background pb-24">
-        <div className="sticky top-0 z-40 bg-background/80 backdrop-blur-md border-b border-border/50 px-4 py-4">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setLocation("/")}
-              className="w-10 h-10 rounded-full bg-secondary/50 flex items-center justify-center hover:bg-secondary transition-colors"
-            >
-              <ArrowLeft className="w-5 h-5" />
-            </button>
-            <h1 className="font-display font-bold text-2xl">Become a Provider</h1>
-          </div>
-        </div>
-
-        <div className="px-6 py-8 max-w-2xl mx-auto">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="space-y-4 text-center"
-          >
-            <h2 className="font-display font-bold text-xl mb-4">Sign in required</h2>
-            <p className="text-muted-foreground mb-6">
-              Please sign in first to create a provider account
-            </p>
-            <button
-              onClick={() => setLocation("/signin")}
-              className="w-full py-3 rounded-xl bg-primary text-primary-foreground font-bold"
-            >
-              Go to Sign In
-            </button>
-          </motion.div>
-        </div>
-      </div>
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" color={theme.primary} />
+        <Text style={styles.loadingText}>{t("common.loading")}</Text>
+      </View>
     );
   }
 
+  if (showSuccess) {
+    return (
+      <View style={styles.centered}>
+        <Ionicons name="checkmark-circle" size={72} color={theme.primary} />
+        <Text style={styles.successTitle}>{t("business_signup.success_title")}</Text>
+        <Text style={styles.successMessage}>{t("business_signup.success_message")}</Text>
+        <ActivityIndicator color={theme.primary} style={{ marginTop: 16 }} />
+      </View>
+    );
+  }
+
+  if (user?.role === "PROVIDER" || user?.role === "PENDING_PROVIDER") {
+    return <Redirect href="/(provider)/dashboard" />;
+  }
+
   return (
-    <div className="min-h-screen bg-background pb-24">
-      <div className="sticky top-0 z-40 bg-background/80 backdrop-blur-md border-b border-border/50 px-4 py-4">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => setLocation("/")}
-            className="w-10 h-10 rounded-full bg-secondary/50 flex items-center justify-center hover:bg-secondary transition-colors"
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-          <h1 className="font-display font-bold text-2xl">Become a Provider</h1>
-        </div>
-      </div>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    >
+      <View style={styles.topBar}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+          <Ionicons name="arrow-back" size={22} color="#111" />
+        </TouchableOpacity>
+        <Text style={styles.topTitle}>{t("business_signup.title")}</Text>
+      </View>
 
-      <div className="px-6 py-8 max-w-2xl mx-auto">
-        {/* Progress Steps */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
-            {[1, 2].map((s) => (
-              <div key={s} className="flex items-center flex-1">
-                <div
-                  className={`w-10 h-10 rounded-full flex items-center justify-center font-bold transition-all ${
-                    step >= s
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-secondary text-muted-foreground"
-                  }`}
-                >
-                  {step > s ? <CheckCircle2 className="w-5 h-5" /> : s}
-                </div>
-                {s < 2 && (
-                  <div
-                    className={`flex-1 h-1 mx-2 transition-all ${
-                      step > s ? "bg-primary" : "bg-secondary"
-                    }`}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
-          <div className="flex justify-between text-xs text-muted-foreground">
-            <span>Business Info</span>
-            <span>Location</span>
-          </div>
-        </div>
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <Text style={styles.subtitle}>{t("business_signup.subtitle")}</Text>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
-          {step === 1 && (
-            <motion.div
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              className="space-y-4"
+        {errorMessage ? (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>{errorMessage}</Text>
+          </View>
+        ) : null}
+
+        <Field
+          label={t("business_signup.business_name")}
+          value={formData.businessName}
+          onChangeText={(v) => updateField("businessName", v)}
+          placeholder={t("business_signup.business_name_placeholder")}
+        />
+        <Field
+          label="Business Location"
+          value={formData.location}
+          onChangeText={(v) => updateField("location", v)}
+          placeholder="123 Main St, Tunis"
+        />
+        {formData.mapsLink ? (
+          <Text style={styles.mapsPreview} numberOfLines={2}>
+            Maps: {formData.mapsLink}
+          </Text>
+        ) : null}
+        <Field
+          label={t("business_signup.email")}
+          value={formData.email}
+          onChangeText={(v) => updateField("email", v)}
+          placeholder={t("business_signup.email_placeholder")}
+          keyboardType="email-address"
+        />
+        <Field
+          label={t("business_signup.phone")}
+          value={formData.phoneNumber}
+          onChangeText={(v) => updateField("phoneNumber", v)}
+          placeholder={t("business_signup.phone_placeholder")}
+          keyboardType="phone-pad"
+        />
+        <Field
+          label={t("business_signup.password")}
+          value={formData.password}
+          onChangeText={(v) => updateField("password", v)}
+          placeholder={t("business_signup.password_placeholder")}
+          secure
+        />
+        <Field
+          label={t("business_signup.confirm_password")}
+          value={formData.confirmPassword}
+          onChangeText={(v) => updateField("confirmPassword", v)}
+          placeholder={t("business_signup.confirm_password")}
+          secure
+        />
+
+        <TouchableOpacity
+          style={styles.termsRow}
+          onPress={() => setTermsAccepted(!termsAccepted)}
+          activeOpacity={0.8}
+        >
+          <Ionicons
+            name={termsAccepted ? "checkbox" : "square-outline"}
+            size={22}
+            color={termsAccepted ? theme.primary : "#888"}
+          />
+          <Text style={styles.termsText}>
+            {t("business_signup.terms_accept")}{" "}
+            <Text
+              style={styles.termsLink}
+              onPress={() => router.push("/legal/terms" as any)}
             >
-              <h2 className="font-display font-bold text-xl mb-6">
-                Business Information
-              </h2>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground flex items-center gap-2">
-                  <Store className="w-4 h-4" />
-                  Business Name
-                </label>
-                <input
-                  type="text"
-                  value={formData.username}
-                  onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                  placeholder="Your business name"
-                  className="w-full px-4 py-3 rounded-xl bg-secondary/50 border border-border focus:ring-2 focus:ring-primary/20 focus:outline-none"
-                  required
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground flex items-center gap-2">
-                  <Phone className="w-4 h-4" />
-                  Phone Number
-                </label>
-                <input
-                  type="tel"
-                  value={formData.phoneNumber}
-                  onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
-                  placeholder="+1 (555) 123-4567"
-                  className="w-full px-4 py-3 rounded-xl bg-secondary/50 border border-border focus:ring-2 focus:ring-primary/20 focus:outline-none"
-                  required
-                />
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  // Validate required fields before proceeding
-                  if (!formData.username || !formData.phoneNumber) {
-                    toast({
-                      title: "Fields required",
-                      description: "Please enter your business name and phone number",
-                      variant: "destructive",
-                    });
-                    return;
-                  }
-                  setStep(2);
-                }}
-                className="w-full py-3 rounded-xl bg-primary text-primary-foreground font-bold mt-6"
-              >
-                Continue
-              </button>
-            </motion.div>
-          )}
-
-          {step === 2 && (
-            <motion.div
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              className="space-y-4"
+              {t("business_signup.terms_link")}
+            </Text>{" "}
+            {t("business_signup.terms_and")}{" "}
+            <Text
+              style={styles.termsLink}
+              onPress={() => router.push("/legal/privacy" as any)}
             >
-              <h2 className="font-display font-bold text-xl mb-6">Location Details</h2>
-              
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground flex items-center gap-2">
-                  <MapPin className="w-4 h-4" />
-                  Address
-                </label>
-                <input
-                  type="text"
-                  value={formData.location}
-                  onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-                  placeholder="123 Main St, City, State ZIP"
-                  className="w-full px-4 py-3 rounded-xl bg-secondary/50 border border-border focus:ring-2 focus:ring-primary/20 focus:outline-none"
-                  required
-                />
-              </div>
+              {t("business_signup.privacy_link")}
+            </Text>
+          </Text>
+        </TouchableOpacity>
 
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground flex items-center gap-2">
-                  <MapPin className="w-4 h-4" />
-                  Google Maps Link (optional)
-                </label>
-                <input
-                  type="url"
-                  value={formData.mapsLink}
-                  onChange={(e) => setFormData({ ...formData, mapsLink: e.target.value })}
-                  placeholder="https://maps.google.com/..."
-                  className="w-full px-4 py-3 rounded-xl bg-secondary/50 border border-border focus:ring-2 focus:ring-primary/20 focus:outline-none"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Help customers find your location easily
-                </p>
-              </div>
-
-              <div className="flex gap-3 mt-6">
-                <button
-                  type="button"
-                  onClick={() => setStep(1)}
-                  className="flex-1 py-3 rounded-xl bg-secondary/50 border border-border font-medium"
-                >
-                  Back
-                </button>
-                <button
-                  type="submit"
-                  disabled={isLoading}
-                  className="flex-1 py-3 rounded-xl bg-primary text-primary-foreground font-bold disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isLoading ? "Creating..." : "Create Account"}
-                </button>
-              </div>
-            </motion.div>
+        <TouchableOpacity
+          style={[styles.submitBtn, loading && styles.disabled]}
+          onPress={handleSubmit}
+          disabled={loading}
+        >
+          {loading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.submitText}>{t("business_signup.submit")}</Text>
           )}
-        </form>
+        </TouchableOpacity>
 
-        <div className="mt-8 p-4 bg-secondary/30 rounded-xl border border-border">
-          <h3 className="font-bold text-sm mb-2">What's next?</h3>
-          <ul className="text-sm text-muted-foreground space-y-1">
-            <li>• Create your first food offer</li>
-            <li>• Set pickup times and prices</li>
-            <li>• Start saving food from going to waste!</li>
-          </ul>
-        </div>
-      </div>
-    </div>
+        <View style={styles.signInRow}>
+          <Text style={styles.signInMuted}>{t("business_signup.already_have_account")}</Text>
+          <Link href="/(auth)/signin" asChild>
+            <TouchableOpacity>
+              <Text style={styles.signInLink}>{t("business_signup.sign_in_here")}</Text>
+            </TouchableOpacity>
+          </Link>
+        </View>
+
+        <View style={styles.benefitsBox}>
+          <Text style={styles.benefitsTitle}>{t("business_signup.benefits_title")}</Text>
+          <Text style={styles.benefitItem}>• {t("business_signup.benefit1")}</Text>
+          <Text style={styles.benefitItem}>• {t("business_signup.benefit2")}</Text>
+          <Text style={styles.benefitItem}>• {t("business_signup.benefit3")}</Text>
+          <Text style={styles.benefitItem}>• {t("business_signup.benefit4")}</Text>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
+function Field({
+  label,
+  value,
+  onChangeText,
+  placeholder,
+  keyboardType,
+  secure,
+}: {
+  label: string;
+  value: string;
+  onChangeText: (v: string) => void;
+  placeholder?: string;
+  keyboardType?: "default" | "email-address" | "phone-pad";
+  secure?: boolean;
+}) {
+  return (
+    <View style={styles.field}>
+      <Text style={styles.label}>{label}</Text>
+      <TextInput
+        style={styles.input}
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor="#999"
+        keyboardType={keyboardType}
+        secureTextEntry={secure}
+        autoCapitalize={keyboardType === "email-address" ? "none" : "sentences"}
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: "#fff" },
+  centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, backgroundColor: "#fff" },
+  loadingText: { marginTop: 12, color: theme.muted },
+  successTitle: { fontSize: 24, fontWeight: "800", color: "#111", marginTop: 16, textAlign: "center" },
+  successMessage: { fontSize: 15, color: theme.muted, marginTop: 8, textAlign: "center", lineHeight: 22 },
+  topBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === "ios" ? 56 : 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.border,
+  },
+  backBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#f5f5f5",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  topTitle: { fontSize: 20, fontWeight: "800", color: "#111", flex: 1 },
+  scroll: { padding: 20, paddingBottom: 40 },
+  subtitle: { fontSize: 14, color: theme.muted, marginBottom: 20, lineHeight: 20 },
+  errorBox: {
+    backgroundColor: theme.destructiveBg,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "#fecaca",
+  },
+  errorText: { color: theme.destructive, fontSize: 14, lineHeight: 20 },
+  field: { marginBottom: 16 },
+  label: { fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 },
+  input: {
+    backgroundColor: "#f5f5f5",
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 15,
+    color: "#111",
+  },
+  mapsPreview: { fontSize: 11, color: theme.muted, marginTop: -8, marginBottom: 12 },
+  termsRow: { flexDirection: "row", alignItems: "flex-start", gap: 10, marginBottom: 20 },
+  termsText: { flex: 1, fontSize: 13, color: "#555", lineHeight: 20 },
+  termsLink: { color: theme.primary, fontWeight: "700", textDecorationLine: "underline" },
+  submitBtn: {
+    backgroundColor: theme.primary,
+    borderRadius: 12,
+    paddingVertical: 16,
+    alignItems: "center",
+  },
+  submitText: { color: "#fff", fontWeight: "700", fontSize: 16 },
+  disabled: { opacity: 0.6 },
+  signInRow: { marginTop: 20, alignItems: "center", gap: 4 },
+  signInMuted: { fontSize: 14, color: theme.muted },
+  signInLink: { fontSize: 14, color: theme.primary, fontWeight: "700" },
+  benefitsBox: {
+    marginTop: 28,
+    padding: 16,
+    backgroundColor: theme.primaryBg,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.primaryBorder,
+  },
+  benefitsTitle: { fontWeight: "700", fontSize: 15, marginBottom: 10, color: "#111" },
+  benefitItem: { fontSize: 13, color: "#444", lineHeight: 22 },
+});

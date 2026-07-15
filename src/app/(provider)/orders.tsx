@@ -18,8 +18,12 @@ import {
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ordersApi, transformOrder } from "@/lib/api-client";
-import { useToast } from "@/hooks/use-toast";
+import { useToast } from "@/lib/toast";
+import { formatPrice } from "@/utils/formatPrice";
 import { useRouter } from "expo-router";
+import { useLanguage } from "@/context/LanguageContext";
+import { ProviderPendingBanner } from "@/components/provider/ProviderPendingBanner";
+import { ProviderQRScannerModal } from "@/components/provider/ProviderQRScannerModal";
 
 import {
   Clock,
@@ -31,14 +35,9 @@ import {
   Package,
   DollarSign,
   QrCode,
-  Camera,
-  Keyboard,
 } from "lucide-react-native";
 
-// For QR scanning in React Native use: expo-camera + expo-barcode-scanner
-// or react-native-vision-camera + vision-camera-code-scanner
-// The QRScannerModal below uses expo-camera as an example — swap if needed.
-// import { CameraView, useCameraPermissions } from "expo-camera";
+type OrderFilter = "all" | "pending" | "confirmed" | "cancelled" | "expired";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -87,10 +86,12 @@ function statusStyle(status: string) {
 export default function ProviderOrders() {
   const { user, isAuthenticated } = useAuth();
   const { toast } = useToast();
+  const { t } = useLanguage();
   const router = useRouter();
   const queryClient = useQueryClient();
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
-  const [filter, setFilter] = useState<"all" | "pending" | "completed">("all");
+  const [filter, setFilter] = useState<OrderFilter>("all");
+  const [searchQuery, setSearchQuery] = useState("");
   const [showQRScanner, setShowQRScanner] = useState(false);
 
   const { data: orders, isLoading } = useQuery({
@@ -106,7 +107,7 @@ export default function ProviderOrders() {
     mutationFn: (id: number) => ordersApi.confirm(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/orders"] });
-      toast({ title: "Order confirmed", description: "Pickup has been confirmed" });
+      toast({ title: t("orders.confirmed"), description: t("provider.dashboard.order_confirmed_desc") });
       setSelectedOrder(null);
     },
   });
@@ -115,13 +116,13 @@ export default function ProviderOrders() {
     mutationFn: (qrCodeToken: string) => ordersApi.scan(qrCodeToken),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/orders"] });
-      toast({ title: "Order found", description: "Order confirmed via QR scan" });
+      toast({ title: t("provider.dashboard.order_found"), description: t("provider.dashboard.order_found_desc") });
       setShowQRScanner(false);
     },
     onError: (error: any) => {
       toast({
-        title: "Error",
-        description: error.message || "Invalid QR code or order not found",
+        title: t("common.error"),
+        description: error.message || t("qr_scanner.invalid_qr"),
       });
     },
   });
@@ -129,7 +130,7 @@ export default function ProviderOrders() {
   if (!isAuthenticated) {
     return (
       <View style={styles.centered}>
-        <Text style={styles.heading}>Sign in required</Text>
+        <Text style={styles.heading}>{t("auth.signInRequired")}</Text>
       </View>
     );
   }
@@ -138,23 +139,43 @@ export default function ProviderOrders() {
     return (
       <View style={styles.centered}>
         <ShoppingBag color={theme.muted} size={64} />
-        <Text style={[styles.heading, { marginTop: 16 }]}>Provider account required</Text>
+        <Text style={[styles.heading, { marginTop: 16 }]}>{t("auth.providerRequired")}</Text>
       </View>
     );
   }
 
-  const activeOrders =
-    orders?.filter((o: any) => o.status === "pending" || o.status === "confirmed") || [];
-  const pastOrders =
-    orders?.filter(
-      (o: any) =>
-        (o.status === "confirmed" && o.collectedAt) ||
-        o.status === "cancelled" ||
-        o.status === "expired"
-    ) || [];
+  const pendingOrders = orders?.filter((o: any) => o.status === "pending") || [];
+  const confirmedOrders = orders?.filter((o: any) => o.status === "confirmed") || [];
+  const cancelledOrders = orders?.filter((o: any) => o.status === "cancelled") || [];
+  const expiredOrders = orders?.filter((o: any) => o.status === "expired") || [];
 
-  const filteredOrders =
-    filter === "all" ? orders : filter === "pending" ? activeOrders : pastOrders;
+  const filteredOrders = (orders || []).filter((order: any) => {
+    if (filter !== "all") {
+      if (filter === "expired") {
+        const isExpired =
+          order.status === "expired" ||
+          (order.status === "pending" &&
+            order.offer?.pickupEndTime &&
+            new Date(order.offer.pickupEndTime).getTime() <= Date.now());
+        if (!isExpired) return false;
+      } else if (order.status !== filter) {
+        return false;
+      }
+    }
+
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      String(order.id).includes(q) ||
+      order.user?.username?.toLowerCase().includes(q) ||
+      order.user?.email?.toLowerCase().includes(q) ||
+      String(order.user?.phoneNumber || "").includes(q) ||
+      order.offer?.title?.toLowerCase().includes(q) ||
+      order.product?.name?.toLowerCase().includes(q)
+    );
+  });
+
+  const isPendingProvider = user?.role === "PENDING_PROVIDER";
 
   return (
     <View style={styles.screen}>
@@ -178,14 +199,27 @@ export default function ProviderOrders() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {isPendingProvider && <ProviderPendingBanner />}
+
+        <TextInput
+          style={styles.searchInput}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholder={t("provider.search_placeholder") || "Search orders..."}
+          placeholderTextColor={theme.muted}
+        />
+
         {/* Filter Tabs */}
-        <View style={styles.filterRow}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <View style={styles.filterRow}>
           {(
             [
-              { key: "all", label: `All (${orders?.length || 0})` },
-              { key: "pending", label: `Pending (${activeOrders.length})` },
-              { key: "completed", label: `Completed (${pastOrders.length})` },
-            ] as const
+              { key: "all" as OrderFilter, label: `${t("provider.tab_all") || "All"} (${orders?.length || 0})` },
+              { key: "pending" as OrderFilter, label: `${t("provider.tab_pending") || "Pending"} (${pendingOrders.length})` },
+              { key: "confirmed" as OrderFilter, label: `${t("provider.tab_confirmed") || "Confirmed"} (${confirmedOrders.length})` },
+              { key: "cancelled" as OrderFilter, label: `${t("provider.status.cancelled") || "Cancelled"} (${cancelledOrders.length})` },
+              { key: "expired" as OrderFilter, label: `${t("provider.status.expired") || "Expired"} (${expiredOrders.length})` },
+            ]
           ).map((tab) => (
             <TouchableOpacity
               key={tab.key}
@@ -202,7 +236,8 @@ export default function ProviderOrders() {
               </Text>
             </TouchableOpacity>
           ))}
-        </View>
+          </View>
+        </ScrollView>
 
         {/* Orders List */}
         {isLoading ? (
@@ -239,7 +274,7 @@ export default function ProviderOrders() {
       )}
 
       {/* QR Scanner Modal */}
-      <QRScannerModal
+      <ProviderQRScannerModal
         visible={showQRScanner}
         onClose={() => setShowQRScanner(false)}
         onScan={(token) => scanOrderMutation.mutate(token)}
@@ -304,7 +339,7 @@ function OrderCard({
             <Text style={styles.metaText}>Qty: {order.quantity}</Text>
             <DollarSign color={theme.textMuted} size={12} />
             <Text style={[styles.metaText, { color: theme.text, fontWeight: "600" }]}>
-              ${((order.totalPrice || 0) / 100).toFixed(2)}
+              {formatPrice(order.totalPrice || 0)}
             </Text>
           </View>
           {order.product?.pickupStart && order.product?.pickupEnd && (
@@ -341,170 +376,6 @@ function OrderCard({
         )}
       </View>
     </TouchableOpacity>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// QRScannerModal
-// ---------------------------------------------------------------------------
-function QRScannerModal({
-  visible,
-  onClose,
-  onScan,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  onScan: (token: string) => void;
-}) {
-  const [mode, setMode] = useState<"camera" | "manual">("camera");
-  const [qrCode, setQrCode] = useState("");
-
-  const handleManualSubmit = () => {
-    if (qrCode.trim()) {
-      onScan(qrCode.trim());
-      setQrCode("");
-      onClose();
-    }
-  };
-
-  const handleClose = () => {
-    setQrCode("");
-    setMode("camera");
-    onClose();
-  };
-
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={handleClose}>
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalCard}>
-          {/* Header */}
-          <View style={styles.modalHeader}>
-            <View style={styles.modalHeaderLeft}>
-              <QrCode color={theme.text} size={22} />
-              <Text style={styles.modalTitle}>Scan QR Code</Text>
-            </View>
-            <TouchableOpacity style={styles.iconBtn} onPress={handleClose}>
-              <X color={theme.text} size={20} />
-            </TouchableOpacity>
-          </View>
-
-          {/* Mode toggle */}
-          <View style={styles.modeToggle}>
-            <TouchableOpacity
-              style={[styles.modeBtn, mode === "camera" && styles.modeBtnActive]}
-              onPress={() => setMode("camera")}
-            >
-              <Camera
-                color={mode === "camera" ? theme.primaryForeground : theme.textMuted}
-                size={16}
-              />
-              <Text
-                style={[
-                  styles.modeBtnText,
-                  mode === "camera" && styles.modeBtnTextActive,
-                ]}
-              >
-                Camera
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modeBtn, mode === "manual" && styles.modeBtnActive]}
-              onPress={() => setMode("manual")}
-            >
-              <Keyboard
-                color={mode === "manual" ? theme.primaryForeground : theme.textMuted}
-                size={16}
-              />
-              <Text
-                style={[
-                  styles.modeBtnText,
-                  mode === "manual" && styles.modeBtnTextActive,
-                ]}
-              >
-                Manual
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Camera mode */}
-          {mode === "camera" && (
-            <View style={styles.cameraPlaceholder}>
-              {/*
-               * Replace this placeholder with your actual camera/barcode scanner.
-               *
-               * expo-camera example:
-               *   <CameraView
-               *     style={StyleSheet.absoluteFill}
-               *     facing="back"
-               *     barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-               *     onBarcodeScanned={({ data }) => { onScan(data); handleClose(); }}
-               *   />
-               *
-               * react-native-vision-camera example:
-               *   <Camera device={device} isActive={true} ... />
-               */}
-              <View style={styles.cameraBox}>
-                <View style={styles.cameraCornerTL} />
-                <View style={styles.cameraCornerTR} />
-                <View style={styles.cameraCornerBL} />
-                <View style={styles.cameraCornerBR} />
-              </View>
-              <View style={styles.cameraIconWrap}>
-                <Camera color={theme.primary} size={40} />
-              </View>
-              <Text style={styles.cameraHint}>
-                Integrate expo-camera or vision-camera here
-              </Text>
-              <Text style={styles.cameraSubHint}>
-                Point at the customer's QR code to confirm pickup
-              </Text>
-            </View>
-          )}
-
-          {/* Manual mode */}
-          {mode === "manual" && (
-            <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
-              <View style={styles.manualForm}>
-                <Text style={styles.label}>Enter QR Code Token</Text>
-                <TextInput
-                  style={[styles.input, { fontFamily: Platform.OS === "ios" ? "Courier" : "monospace" }]}
-                  value={qrCode}
-                  onChangeText={setQrCode}
-                  placeholder="Enter pickup code"
-                  placeholderTextColor={theme.muted}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  autoFocus
-                />
-                <Text style={styles.inputHint}>
-                  Enter the pickup code shown on the customer's order
-                </Text>
-                <View style={styles.modalFooterRow}>
-                  <TouchableOpacity
-                    style={[styles.btnSecondary, { flex: 1 }]}
-                    onPress={handleClose}
-                  >
-                    <Text style={styles.btnSecondaryText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <View style={{ width: 12 }} />
-                  <TouchableOpacity
-                    style={[
-                      styles.btnPrimary,
-                      { flex: 1 },
-                      !qrCode.trim() && styles.btnDisabled,
-                    ]}
-                    onPress={handleManualSubmit}
-                    disabled={!qrCode.trim()}
-                  >
-                    <Text style={styles.btnPrimaryText}>Confirm Pickup</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </KeyboardAvoidingView>
-          )}
-        </View>
-      </View>
-    </Modal>
   );
 }
 
@@ -556,7 +427,7 @@ function OrderDetailsModal({
               <DetailRow label="Quantity" value={String(order.quantity)} />
               <DetailRow
                 label="Price"
-                value={`$${((order.totalPrice || 0) / 100).toFixed(2)}`}
+                value={formatPrice(order.totalPrice || 0)}
               />
               <DetailRow
                 label="Status"
@@ -684,15 +555,26 @@ const styles = StyleSheet.create({
     paddingBottom: 96,
     gap: 12,
   },
+  searchInput: {
+    backgroundColor: theme.secondary,
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: theme.text,
+  },
 
   // Filter tabs
   filterRow: {
     flexDirection: "row",
     gap: 8,
     marginBottom: 4,
+    paddingRight: 8,
   },
   filterTab: {
-    flex: 1,
+    paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 12,
     backgroundColor: theme.secondary,
@@ -929,8 +811,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  cameraIconWrap: {
-    position: "absolute",
+  cameraPermission: {
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 24,
   },
   cameraCornerTL: {
     position: "absolute",

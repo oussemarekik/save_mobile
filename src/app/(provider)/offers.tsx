@@ -9,17 +9,24 @@ import {
   TextInput,
   Modal,
   ActivityIndicator,
-  Alert,
   Platform,
   KeyboardAvoidingView,
   Animated,
   Dimensions,
 } from "react-native";
 import { useAuth } from "@/hooks/use-auth";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { offersApi, transformOfferToProduct, storageApi } from "@/lib/api-client";
-import { useToast } from "@/hooks/use-toast";
-import { useRouter } from "expo-router";
+import { providerOffersKey, invalidateOfferQueries } from "@/lib/offer-queries";
+import { useDeleteOffer } from "@/hooks/use-delete-offer";
+import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
+import { useToast } from "@/lib/toast";
+import { pickImageFromLibrary } from "@/lib/pick-image";
+import { formatPrice } from "@/utils/formatPrice";
+import { useRouter, useLocalSearchParams } from "expo-router";
+import { useLanguage } from "@/context/LanguageContext";
+import { filterOffers, getOfferStats, type OfferFilter } from "@/utils/offerUtils";
+import { ProviderPendingBanner } from "@/components/provider/ProviderPendingBanner";
 
 // Lucide icons — swap for your icon library (e.g. react-native-vector-icons)
 // Below are minimal SVG-based placeholders; replace as needed.
@@ -57,40 +64,56 @@ const theme = {
 export default function ProviderOffers() {
   const { user, isAuthenticated } = useAuth();
   const { toast } = useToast();
+  const { t } = useLanguage();
   const router = useRouter();
+  const params = useLocalSearchParams<{ create?: string }>();
   const queryClient = useQueryClient();
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingOffer, setEditingOffer] = useState<any>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filter, setFilter] = useState<OfferFilter>("all");
+
+  useEffect(() => {
+    if (params.create === "true") setShowCreateForm(true);
+  }, [params.create]);
 
   const { data: offers, isLoading } = useQuery({
-    queryKey: ["/offers/owner"],
+    queryKey: providerOffersKey(user?.id),
     queryFn: () => offersApi.getByOwner(user?.id || 0),
     enabled: !!user?.id && typeof user.id === "number",
   });
 
-  const deleteOfferMutation = useMutation({
-    mutationFn: (id: number) => offersApi.delete(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/offers"] });
-      toast({ title: "Offer deleted", description: "Your offer has been removed" });
-    },
-  });
+  const deleteOfferMutation = useDeleteOffer();
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
 
   const handleDelete = (id: number) => {
-    Alert.alert("Delete offer?", "This action cannot be undone.", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: () => deleteOfferMutation.mutate(id),
+    confirm({
+      title: t("offer_card.confirm_deletion") || "Delete offer?",
+      message:
+        t("offer_card.delete_message") ||
+        "Are you sure you want to delete this offer? This action cannot be undone.",
+      confirmLabel: t("common.delete") || "Delete",
+      cancelLabel: t("common.cancel") || "Cancel",
+      destructive: true,
+      onConfirm: async () => {
+        try {
+          await deleteOfferMutation.mutateAsync(Number(id));
+          toast({ title: t("provider.home.offer_deleted"), description: t("provider.dashboard.offer_deleted_desc") });
+        } catch (error: any) {
+          toast({
+            title: t("provider.dashboard.delete_failed_title"),
+            description: error.message || t("provider.dashboard.delete_failed_desc"),
+          });
+          throw error;
+        }
       },
-    ]);
+    });
   };
 
   if (!isAuthenticated) {
     return (
       <View style={styles.centered}>
-        <Text style={styles.heading}>Sign in required</Text>
+        <Text style={styles.heading}>{t("auth.signInRequired")}</Text>
       </View>
     );
   }
@@ -99,10 +122,14 @@ export default function ProviderOffers() {
     return (
       <View style={styles.centered}>
         <Package color={theme.muted} size={64} />
-        <Text style={[styles.heading, { marginTop: 16 }]}>Provider account required</Text>
+        <Text style={[styles.heading, { marginTop: 16 }]}>{t("auth.providerRequired")}</Text>
       </View>
     );
   }
+
+  const offerStats = getOfferStats(offers || []);
+  const displayedOffers = filterOffers(offers || [], searchQuery, filter);
+  const isPendingProvider = user?.role === "PENDING_PROVIDER";
 
   return (
     <View style={styles.screen}>
@@ -115,7 +142,7 @@ export default function ProviderOffers() {
           >
             <ArrowLeft color={theme.text} size={20} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>My Offers</Text>
+          <Text style={styles.headerTitle}>{t("provider.dashboard.my_offers_title")}</Text>
         </View>
         <TouchableOpacity
           style={[styles.iconBtn, { backgroundColor: theme.primary }]}
@@ -130,14 +157,45 @@ export default function ProviderOffers() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
+        {isPendingProvider && <ProviderPendingBanner />}
+
+        <TextInput
+          style={styles.searchInput}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholder={t("provider.home.search_placeholder") || "Search offers..."}
+          placeholderTextColor={theme.muted}
+        />
+
+        <View style={styles.filterRow}>
+          {(
+            [
+              { key: "all" as OfferFilter, label: `${t("provider.home.filter_all") || "All"} (${offerStats.total})` },
+              { key: "active" as OfferFilter, label: `${t("provider.home.filter_active") || "Active"} (${offerStats.active})` },
+              { key: "expired" as OfferFilter, label: `${t("provider.home.filter_expired") || "Expired"} (${offerStats.expired})` },
+              { key: "low_stock" as OfferFilter, label: `${t("provider.home.filter_low_stock") || "Low Stock"} (${offerStats.lowStock})` },
+            ]
+          ).map((tab) => (
+            <TouchableOpacity
+              key={tab.key}
+              style={[styles.filterChip, filter === tab.key && styles.filterChipActive]}
+              onPress={() => setFilter(tab.key)}
+            >
+              <Text style={[styles.filterChipText, filter === tab.key && styles.filterChipTextActive]}>
+                {tab.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
         {isLoading ? (
           <>
             {[1, 2, 3].map((i) => (
               <View key={i} style={styles.skeletonCard} />
             ))}
           </>
-        ) : offers && offers.length > 0 ? (
-          offers.map((offer: any) => {
+        ) : displayedOffers.length > 0 ? (
+          displayedOffers.map((offer: any) => {
             const product = transformOfferToProduct(offer);
             return (
               <OfferCard
@@ -149,6 +207,11 @@ export default function ProviderOffers() {
               />
             );
           })
+        ) : offers && offers.length > 0 ? (
+          <View style={styles.emptyState}>
+            <Package color={theme.muted} size={48} />
+            <Text style={styles.emptyText}>{t("provider.home.no_results") || "No offers match your filters"}</Text>
+          </View>
         ) : (
           <EmptyState onCreatePress={() => setShowCreateForm(true)} />
         )}
@@ -160,7 +223,7 @@ export default function ProviderOffers() {
         onClose={() => setShowCreateForm(false)}
         onSuccess={() => {
           setShowCreateForm(false);
-          queryClient.invalidateQueries({ queryKey: ["/offers"] });
+          invalidateOfferQueries(queryClient);
         }}
       />
 
@@ -171,14 +234,14 @@ export default function ProviderOffers() {
           onClose={() => setEditingOffer(null)}
           onSuccess={() => {
             setEditingOffer(null);
-            queryClient.invalidateQueries({ queryKey: ["/offers"] });
+            invalidateOfferQueries(queryClient);
           }}
         />
       )}
+      {confirmDialog}
     </View>
   );
 }
-
 // ---------------------------------------------------------------------------
 // OfferCard
 // ---------------------------------------------------------------------------
@@ -206,7 +269,7 @@ function OfferCard({
             {product.name}
           </Text>
           <Text style={styles.cardSubtitle}>{product.quantity} available</Text>
-          <Text style={styles.cardPrice}>${(product.price / 100).toFixed(2)}</Text>
+          <Text style={styles.cardPrice}>{formatPrice(product.price)}</Text>
         </View>
       </View>
       <View style={styles.cardFooter}>
@@ -233,13 +296,14 @@ function OfferCard({
 // EmptyState
 // ---------------------------------------------------------------------------
 function EmptyState({ onCreatePress }: { onCreatePress: () => void }) {
+  const { t } = useLanguage();
   return (
     <View style={styles.emptyState}>
       <Package color={theme.muted} size={48} />
-      <Text style={styles.emptyText}>No offers yet</Text>
+      <Text style={styles.emptyText}>{t("provider.home.no_offers")}</Text>
       <TouchableOpacity style={styles.primaryBtn} onPress={onCreatePress}>
         <Plus color={theme.primaryForeground} size={20} />
-        <Text style={styles.primaryBtnText}>Publish Your First Offer</Text>
+        <Text style={styles.primaryBtnText}>{t("provider.home.publish_offer")}</Text>
       </TouchableOpacity>
     </View>
   );
@@ -335,7 +399,7 @@ function BottomSheet({
         useNativeDriver: true,
       }).start();
     }
-  }, [visible]);
+  }, [visible, slideAnim]);
 
   return (
     <Modal
@@ -344,17 +408,27 @@ function BottomSheet({
       animationType="none"
       onRequestClose={onClose}
     >
-      <View style={styles.overlay}>
-        <TouchableOpacity style={StyleSheet.absoluteFill} onPress={onClose} />
+      <KeyboardAvoidingView
+        style={styles.overlay}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        <TouchableOpacity style={StyleSheet.absoluteFill} onPress={onClose} activeOpacity={1} />
         <Animated.View
           style={[
             styles.sheet,
             { transform: [{ translateY: slideAnim }] },
           ]}
         >
-          {children}
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator
+            nestedScrollEnabled
+            contentContainerStyle={styles.sheetScrollContent}
+          >
+            {children}
+          </ScrollView>
         </Animated.View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -371,11 +445,12 @@ function CreateOfferModal({
   onClose: () => void;
   onSuccess: () => void;
 }) {
+  const { t } = useLanguage();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [imageUri, setImageUri] = useState<string | null>(null);
-  const [selectedImage, setSelectedImage] = useState<any>(null);
+  const [selectedImage, setSelectedImage] = useState<{ uri: string; mimeType?: string; fileName?: string } | null>(null);
   const [form, setForm] = useState({
     title: "",
     description: "",
@@ -391,11 +466,11 @@ function CreateOfferModal({
   const set = (key: string) => (val: string) => setForm((f) => ({ ...f, [key]: val }));
 
   const pickImage = async () => {
-    // Use expo-image-picker or react-native-image-picker in your project
-    // Example with expo-image-picker:
-    // const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images });
-    // if (!result.canceled) { setImageUri(result.assets[0].uri); setSelectedImage(result.assets[0]); }
-    Alert.alert("Image picker", "Integrate your image picker library here.");
+    const picked = await pickImageFromLibrary();
+    if (picked) {
+      setImageUri(picked.uri);
+      setSelectedImage(picked);
+    }
   };
 
   const handleSubmit = async () => {
@@ -427,7 +502,7 @@ function CreateOfferModal({
       const createData: any = {
         title: form.title,
         description: form.description,
-        price: Math.round(parseFloat(form.price) * 100),
+        price: parseFloat(form.price),
         quantity: parseInt(form.quantity),
         expirationDate: new Date(Date.now() + 86400000).toISOString(),
         pickupStartTime: pickupStartDateTime.toISOString(),
@@ -437,14 +512,14 @@ function CreateOfferModal({
         images,
       };
       if (form.originalPrice) {
-        createData.originalPrice = Math.round(parseFloat(form.originalPrice) * 100);
+        createData.originalPrice = parseFloat(form.originalPrice);
       }
 
       await offersApi.create(createData);
-      toast({ title: "Offer published!", description: "Your offer is now live" });
+      toast({ title: t("provider.dashboard.offer_published"), description: t("provider.dashboard.offer_published_desc") });
       onSuccess();
     } catch (err: any) {
-      toast({ title: "Error", description: err.message || "Failed to create offer" });
+      toast({ title: t("common.error"), description: err.message || t("provider.dashboard.create_failed") });
     } finally {
       setIsLoading(false);
       setUploadingImage(false);
@@ -453,29 +528,27 @@ function CreateOfferModal({
 
   return (
     <BottomSheet visible={visible} onClose={onClose}>
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
-        <ScrollView showsVerticalScrollIndicator={false}>
           {/* Header */}
           <View style={styles.sheetHeader}>
             <View>
-              <Text style={styles.sheetTitle}>Publish New Offer</Text>
-              <Text style={styles.sheetSubtitle}>Create and publish a new food offer</Text>
+              <Text style={styles.sheetTitle}>{t("provider.dashboard.publish_new_offer")}</Text>
+              <Text style={styles.sheetSubtitle}>{t("provider.dashboard.publish_new_offer_sub")}</Text>
             </View>
             <TouchableOpacity style={styles.iconBtn} onPress={onClose}>
               <X color={theme.text} size={20} />
             </TouchableOpacity>
           </View>
 
-          <Field label="Title">
-            <Input value={form.title} onChangeText={set("title")} placeholder="Magic Bag" />
+          <Field label={t("offer_card.title_label")}>
+            <Input value={form.title} onChangeText={set("title")} placeholder={t("offer_card.title_placeholder")} />
           </Field>
 
-          <Field label="Description">
+          <Field label={t("offer_card.description_label")}>
             <TextInput
               style={[styles.input, { height: 88, textAlignVertical: "top" }]}
               value={form.description}
               onChangeText={set("description")}
-              placeholder="Mixed pastries, sandwiches, and more..."
+              placeholder={t("offer_card.description_placeholder")}
               placeholderTextColor={theme.muted}
               multiline
               numberOfLines={3}
@@ -579,7 +652,7 @@ function CreateOfferModal({
 
           <View style={[styles.row, { marginTop: 24 }]}>
             <TouchableOpacity style={[styles.btnSecondary, { flex: 1 }]} onPress={onClose}>
-              <Text style={styles.btnSecondaryText}>Cancel</Text>
+              <Text style={styles.btnSecondaryText}>{t("common.cancel")}</Text>
             </TouchableOpacity>
             <View style={{ width: 12 }} />
             <TouchableOpacity
@@ -590,14 +663,12 @@ function CreateOfferModal({
               {isLoading || uploadingImage ? (
                 <ActivityIndicator color={theme.primaryForeground} size="small" />
               ) : (
-                <Text style={styles.btnPrimaryText}>Publish Offer</Text>
+                <Text style={styles.btnPrimaryText}>{t("provider.home.publish_offer")}</Text>
               )}
             </TouchableOpacity>
           </View>
 
           <View style={{ height: 32 }} />
-        </ScrollView>
-      </KeyboardAvoidingView>
     </BottomSheet>
   );
 }
@@ -616,11 +687,12 @@ function EditOfferModal({
   onClose: () => void;
   onSuccess: () => void;
 }) {
+  const { t } = useLanguage();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [imageUri, setImageUri] = useState<string | null>(null);
-  const [selectedImage, setSelectedImage] = useState<any>(null);
+  const [selectedImage, setSelectedImage] = useState<{ uri: string; mimeType?: string; fileName?: string } | null>(null);
   const product = transformOfferToProduct(offer);
 
   const extractTime = (dt: string | Date | null | undefined, def: string): string => {
@@ -637,8 +709,8 @@ function EditOfferModal({
   const [form, setForm] = useState({
     title: offer.title || product.name || "",
     description: offer.description || "",
-    price: ((offer.price || product.price || 0) / 100).toFixed(2),
-    originalPrice: ((offer.originalPrice || product.originalPrice || 0) / 100).toFixed(2),
+    price: String(offer.price || product.price || 0),
+    originalPrice: String(offer.originalPrice || product.originalPrice || 0),
     quantity: String(offer.quantity || product.quantity || ""),
     pickupStartTime: extractTime(offer.pickupStartTime, "17:00"),
     pickupEndTime: extractTime(offer.pickupEndTime, "18:00"),
@@ -653,7 +725,11 @@ function EditOfferModal({
   const set = (key: string) => (val: string) => setForm((f) => ({ ...f, [key]: val }));
 
   const pickImage = async () => {
-    Alert.alert("Image picker", "Integrate your image picker library here.");
+    const picked = await pickImageFromLibrary();
+    if (picked) {
+      setImageUri(picked.uri);
+      setSelectedImage(picked);
+    }
   };
 
   const handleSubmit = async () => {
@@ -687,7 +763,7 @@ function EditOfferModal({
       const updateData: any = {
         title: form.title,
         description: form.description,
-        price: Math.round(parseFloat(form.price) * 100),
+        price: parseFloat(form.price),
         quantity: parseInt(form.quantity),
         pickupStartTime: pickupStartDateTime.toISOString(),
         pickupEndTime: pickupEndDateTime.toISOString(),
@@ -696,14 +772,14 @@ function EditOfferModal({
         images: imagesToSend,
       };
       if (form.originalPrice) {
-        updateData.originalPrice = Math.round(parseFloat(form.originalPrice) * 100);
+        updateData.originalPrice = parseFloat(form.originalPrice);
       }
 
       await offersApi.update(offer.id, updateData);
-      toast({ title: "Offer updated!", description: "Your changes have been saved" });
+      toast({ title: t("offer_card.offer_updated"), description: t("provider.dashboard.offer_updated_desc") });
       onSuccess();
     } catch (err: any) {
-      toast({ title: "Error", description: err.message || "Failed to update offer" });
+      toast({ title: t("common.error"), description: err.message || t("offer_card.update_failed") });
     } finally {
       setIsLoading(false);
       setUploadingImage(false);
@@ -712,20 +788,18 @@ function EditOfferModal({
 
   return (
     <BottomSheet visible={visible} onClose={onClose}>
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
-        <ScrollView showsVerticalScrollIndicator={false}>
           <View style={styles.sheetHeader}>
-            <Text style={styles.sheetTitle}>Edit Offer</Text>
+            <Text style={styles.sheetTitle}>{t("offer_card.edit_offer")}</Text>
             <TouchableOpacity style={styles.iconBtn} onPress={onClose}>
               <X color={theme.text} size={20} />
             </TouchableOpacity>
           </View>
 
-          <Field label="Title">
+          <Field label={t("offer_card.title_label")}>
             <Input value={form.title} onChangeText={set("title")} />
           </Field>
 
-          <Field label="Description">
+          <Field label={t("offer_card.description_label")}>
             <TextInput
               style={[styles.input, { height: 88, textAlignVertical: "top" }]}
               value={form.description}
@@ -820,7 +894,7 @@ function EditOfferModal({
 
           <View style={[styles.row, { marginTop: 24 }]}>
             <TouchableOpacity style={[styles.btnSecondary, { flex: 1 }]} onPress={onClose}>
-              <Text style={styles.btnSecondaryText}>Cancel</Text>
+              <Text style={styles.btnSecondaryText}>{t("common.cancel")}</Text>
             </TouchableOpacity>
             <View style={{ width: 12 }} />
             <TouchableOpacity
@@ -831,14 +905,12 @@ function EditOfferModal({
               {isLoading || uploadingImage ? (
                 <ActivityIndicator color={theme.primaryForeground} size="small" />
               ) : (
-                <Text style={styles.btnPrimaryText}>Save Changes</Text>
+                <Text style={styles.btnPrimaryText}>{t("offer_card.save_changes")}</Text>
               )}
             </TouchableOpacity>
           </View>
 
           <View style={{ height: 32 }} />
-        </ScrollView>
-      </KeyboardAvoidingView>
     </BottomSheet>
   );
 }
@@ -863,6 +935,41 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 96,
     gap: 12,
+  },
+  searchInput: {
+    backgroundColor: theme.secondary,
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: theme.text,
+  },
+  filterRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  filterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: theme.secondary,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  filterChipActive: {
+    backgroundColor: theme.primary,
+    borderColor: theme.primary,
+  },
+  filterChipText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: theme.textMuted,
+  },
+  filterChipTextActive: {
+    color: theme.primaryForeground,
   },
 
   // Header
@@ -1050,6 +1157,9 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     maxHeight: SCREEN_HEIGHT * 0.92,
+    width: "100%",
+  },
+  sheetScrollContent: {
     padding: 24,
     paddingBottom: Platform.OS === "ios" ? 40 : 24,
   },

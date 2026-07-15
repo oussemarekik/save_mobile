@@ -16,6 +16,11 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
    npx expo start
    ```
 
+   The app reads `EXPO_PUBLIC_API_URL` for API requests. For local iOS Simulator
+   development, `http://localhost:3001` is usually the right value because the
+   backend runs on your Mac. If you test on a physical device, set it to your
+   Mac's LAN IP instead.
+
 In the output, you'll find options to open the app in a
 
 - [development build](https://docs.expo.dev/develop/development-builds/introduction/)

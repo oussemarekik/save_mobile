@@ -5,11 +5,15 @@ import {
 import { useRouter } from "expo-router";
 import { useFavorites, useToggleFavorite, useCreateOrder } from "@/hooks/use-shop";
 import { useAuth } from "@/hooks/use-auth";
+import { useLanguage } from "@/context/LanguageContext";
+import { formatPrice } from "@/utils/formatPrice";
+import { theme } from "@/lib/theme";
 import { Ionicons } from "@expo/vector-icons";
 import Toast from "react-native-toast-message";
 import type { Product, Store } from "@/lib/mock-data";
+import { isOfferExpired } from "@/utils/offerUtils";
+import { sanitizeErrorMessage } from "@/utils/errorUtils";
 
-const PRIMARY = "#16a34a";
 const FALLBACK = "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&q=80";
 
 interface BagCardProps {
@@ -25,6 +29,7 @@ export function BagCard({ product, store }: BagCardProps) {
   const { isAuthenticated } = useAuth();
   const [isFavorited, setIsFavorited] = useState(favorites?.includes(product.id) || false);
   const [imgError, setImgError] = useState(false);
+  const { t } = useLanguage();
 
   const originalPriceValue = product.originalPrice || 0;
   const priceValue = product.price || 0;
@@ -32,10 +37,10 @@ export function BagCard({ product, store }: BagCardProps) {
     ? Math.round(((originalPriceValue - priceValue) / originalPriceValue) * 100)
     : 0;
 
-  const price = `$${(priceValue / 100).toFixed(2)}`;
-  const originalPrice = originalPriceValue > priceValue
-    ? `$${(originalPriceValue / 100).toFixed(2)}`
-    : null;
+  const price = formatPrice(priceValue);
+  const originalPrice = originalPriceValue > priceValue ? formatPrice(originalPriceValue) : null;
+  const isExpired = isOfferExpired(product.expirationDate);
+  const isUnavailable = product.quantity === 0 || isExpired;
 
   const handleFavorite = () => {
     toggleFavorite(product.id);
@@ -44,19 +49,31 @@ export function BagCard({ product, store }: BagCardProps) {
 
   const handleOrder = () => {
     if (!isAuthenticated) {
-      Toast.show({ type: "error", text1: "Sign in required", text2: "Please sign in to order this bag" });
+      Toast.show({ type: "error", text1: t("common.signIn") || "Sign in required", text2: t("auth.signInToOrder") || "Please sign in to order" });
       router.push("/(auth)/signin");
       return;
     }
+    if (isExpired) {
+      Toast.show({
+        type: "error",
+        text1: t("common.expired") || "Expired",
+        text2: t("client.offers.detail.expired_cannot_order") || "This offer has expired and cannot be ordered.",
+      });
+      return;
+    }
     if (product.quantity === 0) {
-      Toast.show({ type: "error", text1: "Sold out", text2: "This item is no longer available" });
+      Toast.show({ type: "error", text1: t("common.sold_out") || "Sold out", text2: t("offers.unavailable") || "This item is no longer available" });
       return;
     }
     createOrder(
       { productId: product.id, quantity: 1 },
       {
-        onSuccess: () => Toast.show({ type: "success", text1: "Order placed!", text2: "Your Magic Bag is reserved." }),
-        onError: (error: any) => Toast.show({ type: "error", text1: "Error", text2: error?.message || "Failed to place order" }),
+        onSuccess: () => Toast.show({ type: "success", text1: t("orders.orderPlaced") || "Order placed!" }),
+        onError: (error: unknown) => Toast.show({
+          type: "error",
+          text1: t("common.error"),
+          text2: sanitizeErrorMessage(error, { defaultMessage: "Failed to place order" }),
+        }),
       }
     );
   };
@@ -76,10 +93,12 @@ export function BagCard({ product, store }: BagCardProps) {
           onError={() => setImgError(true)}
         />
 
-        {/* Sold out overlay */}
-        {product.quantity === 0 && (
+        {/* Sold out / expired overlay */}
+        {isUnavailable && (
           <View style={s.soldOutOverlay}>
-            <Text style={s.soldOutText}>Sold Out</Text>
+            <Text style={s.soldOutText}>
+              {isExpired ? (t("common.expired") || "Expired") : (t("common.sold_out") || "Sold Out")}
+            </Text>
           </View>
         )}
 
@@ -92,7 +111,11 @@ export function BagCard({ product, store }: BagCardProps) {
           )}
           <View style={s.quantityBadge}>
             <Text style={s.quantityBadgeText}>
-              {product.quantity > 0 ? `${product.quantity} left` : "Sold out"}
+              {isExpired
+                ? (t("common.expired") || "Expired")
+                : product.quantity > 0
+                  ? `${product.quantity} left`
+                  : (t("common.sold_out") || "Sold out")}
             </Text>
           </View>
         </View>
@@ -176,7 +199,7 @@ const s = StyleSheet.create({
   imageContainer: { width: "100%", height: 160, backgroundColor: "#f0f0f0" },
   image: { width: "100%", height: "100%" },
   soldOutOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(0,0,0,0.6)",
     alignItems: "center", justifyContent: "center",
   },
@@ -229,14 +252,14 @@ const s = StyleSheet.create({
     paddingTop: 8, borderTopWidth: 1, borderTopColor: "#f0f0f0",
   },
   priceRow: { flexDirection: "row", alignItems: "baseline", gap: 6 },
-  price: { fontSize: 18, fontWeight: "800", color: PRIMARY },
+  price: { fontSize: 18, fontWeight: "800", color: theme.primary },
   originalPrice: { fontSize: 12, color: "#aaa", textDecorationLine: "line-through" },
 
   orderButton: {
     flexDirection: "row", alignItems: "center", gap: 6,
-    backgroundColor: PRIMARY, borderRadius: 10,
+    backgroundColor: theme.primary, borderRadius: 10,
     paddingHorizontal: 12, paddingVertical: 8,
-    shadowColor: PRIMARY, shadowOpacity: 0.25, shadowRadius: 4, elevation: 2,
+    shadowColor: theme.primary, shadowOpacity: 0.25, shadowRadius: 4, elevation: 2,
   },
   orderButtonDisabled: { opacity: 0.5 },
   orderButtonText: { color: "#fff", fontWeight: "700", fontSize: 12 },
