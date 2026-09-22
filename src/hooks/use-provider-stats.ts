@@ -3,6 +3,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { offersApi, ordersApi } from "@/lib/api-client";
 import { providerOffersKey } from "@/lib/offer-queries";
 import { getOfferStats } from "@/utils/offerUtils";
+import { co2SavedFromMeals, waterSavedFromMeals } from "@/lib/constants";
 
 export function useProviderStats() {
   const { user, isAuthenticated } = useAuth();
@@ -25,8 +26,8 @@ export function useProviderStats() {
     return sum + (order.quantity || 0) * price;
   }, 0);
   const totalMealsSaved = confirmedOrders.reduce((sum: number, order: any) => sum + (order.quantity || 0), 0);
-  const co2Saved = totalMealsSaved * 1.5;
-  const waterSaved = totalMealsSaved * 1500;
+  const co2Saved = co2SavedFromMeals(totalMealsSaved);
+  const waterSaved = waterSavedFromMeals(totalMealsSaved);
   const totalItems = offers.reduce((sum: number, o: any) => sum + (o.quantity ?? 0), 0);
 
   return {

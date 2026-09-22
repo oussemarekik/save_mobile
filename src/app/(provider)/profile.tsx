@@ -11,7 +11,7 @@ import {
 } from "react-native";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
-import { ratingsApi } from "@/lib/api-client";
+import { ratingsApi, buildImageUrl } from "@/lib/api-client";
 import { useToast } from "@/lib/toast";
 import { useRouter } from "expo-router";
 import { useLanguage } from "@/context/LanguageContext";
@@ -146,7 +146,7 @@ export default function ProviderProfile() {
           <View style={styles.avatarWrap}>
             {user?.profileImage ? (
               <Image
-                source={{ uri: user.profileImage }}
+                source={{ uri: buildImageUrl(user.profileImage) || user.profileImage }}
                 style={styles.avatarImage}
                 resizeMode="cover"
               />

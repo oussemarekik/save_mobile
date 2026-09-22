@@ -13,8 +13,7 @@ import Toast from "react-native-toast-message";
 import type { Product, Store } from "@/lib/mock-data";
 import { isOfferExpired } from "@/utils/offerUtils";
 import { sanitizeErrorMessage } from "@/utils/errorUtils";
-
-const FALLBACK = "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&q=80";
+import { FALLBACK_IMAGE as FALLBACK } from "@/lib/asset-uri";
 
 interface BagCardProps {
   product: Product;
@@ -80,67 +79,78 @@ export function BagCard({ product, store }: BagCardProps) {
 
   return (
     <TouchableOpacity
-      style={s.card}
+      style={[s.card, isExpired && s.cardExpired]}
       activeOpacity={0.92}
       onPress={() => router.push(`/product/${product.id}`)}
     >
       {/* Image */}
       <View style={s.imageContainer}>
         <Image
-          source={{ uri: imgError ? FALLBACK : (product.imageUrl || store?.imageUrl || FALLBACK) }}
-          style={s.image}
+          source={
+            imgError || !(product.imageUrl || store?.imageUrl)
+              ? DEFAULT_OFFER_IMAGE
+              : { uri: product.imageUrl || store?.imageUrl || FALLBACK }
+          }
+          style={[s.image, isExpired && s.imageBlurred]}
+          blurRadius={isExpired ? 6 : 0}
           resizeMode="cover"
           onError={() => setImgError(true)}
         />
 
-        {/* Sold out / expired overlay */}
+        {/* Single sold out / expired overlay */}
         {isUnavailable && (
           <View style={s.soldOutOverlay}>
-            <Text style={s.soldOutText}>
-              {isExpired ? (t("common.expired") || "Expired") : (t("common.sold_out") || "Sold Out")}
-            </Text>
+            <View style={s.soldOutBadge}>
+              <Text style={s.soldOutText}>
+                {isExpired ? (t("common.expired") || "Expired") : (t("common.sold_out") || "Sold Out")}
+              </Text>
+            </View>
           </View>
         )}
 
-        {/* Top-left badges */}
-        <View style={s.badgesRow}>
-          {discount > 0 && (
-            <View style={s.discountBadge}>
-              <Text style={s.discountBadgeText}>{discount}% OFF</Text>
-            </View>
-          )}
-          <View style={s.quantityBadge}>
-            <Text style={s.quantityBadgeText}>
-              {isExpired
-                ? (t("common.expired") || "Expired")
-                : product.quantity > 0
+        {/* Top-left badges — hide for expired to avoid redundancy */}
+        {!isExpired && (
+          <View style={s.badgesRow}>
+            {discount > 0 && (
+              <View style={s.discountBadge}>
+                <Text style={s.discountBadgeText}>{discount}% OFF</Text>
+              </View>
+            )}
+            <View style={s.quantityBadge}>
+              <Text style={s.quantityBadgeText}>
+                {product.quantity > 0
                   ? `${product.quantity} left`
                   : (t("common.sold_out") || "Sold out")}
-            </Text>
+              </Text>
+            </View>
           </View>
-        </View>
+        )}
 
         {/* Favorite button */}
-        <TouchableOpacity style={s.favoriteButton} onPress={handleFavorite} activeOpacity={0.8}>
-          <Ionicons
-            name={isFavorited ? "heart" : "heart-outline"}
-            size={16}
-            color={isFavorited ? "#ef4444" : "#9ca3af"}
-          />
-        </TouchableOpacity>
+        {!isExpired && (
+          <TouchableOpacity style={s.favoriteButton} onPress={handleFavorite} activeOpacity={0.8}>
+            <Ionicons
+              name={isFavorited ? "heart" : "heart-outline"}
+              size={16}
+              color={isFavorited ? "#ef4444" : "#9ca3af"}
+            />
+          </TouchableOpacity>
+        )}
 
-        {/* Store logo */}
-        {store?.logoUrl && (
+        {/* Store logo — hide when expired */}
+        {!isExpired && store?.logoUrl ? (
           <View style={s.storeLogo}>
             <Image source={{ uri: store.logoUrl }} style={s.storeLogoImage} resizeMode="cover" />
           </View>
-        )}
+        ) : null}
       </View>
 
       {/* Content */}
-      <View style={s.content}>
+      <View style={[s.content, isExpired && s.contentBlurred]}>
         <View>
-          <Text style={s.storeName} numberOfLines={1}>{store?.name || "Unknown Store"}</Text>
+          {!isExpired ? (
+            <Text style={s.storeName} numberOfLines={1}>{store?.name || "Unknown Store"}</Text>
+          ) : null}
           <Text style={s.productName} numberOfLines={1}>{product.name || "Food Offer"}</Text>
         </View>
 
@@ -153,29 +163,31 @@ export function BagCard({ product, store }: BagCardProps) {
         </View>
 
         {/* Price + Order button */}
-        <View style={s.footer}>
-          <View style={s.priceRow}>
-            <Text style={s.price}>{price}</Text>
-            {originalPrice && (
-              <Text style={s.originalPrice}>{originalPrice}</Text>
-            )}
+        {!isExpired ? (
+          <View style={s.footer}>
+            <View style={s.priceRow}>
+              <Text style={s.price}>{price}</Text>
+              {originalPrice && (
+                <Text style={s.originalPrice}>{originalPrice}</Text>
+              )}
+            </View>
+            <TouchableOpacity
+              style={[s.orderButton, (isPending || product.quantity === 0) && s.orderButtonDisabled]}
+              onPress={handleOrder}
+              disabled={isPending || product.quantity === 0}
+              activeOpacity={0.85}
+            >
+              {isPending ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <>
+                  <Ionicons name="bag-outline" size={14} color="#fff" />
+                  <Text style={s.orderButtonText}>Order</Text>
+                </>
+              )}
+            </TouchableOpacity>
           </View>
-          <TouchableOpacity
-            style={[s.orderButton, (isPending || product.quantity === 0) && s.orderButtonDisabled]}
-            onPress={handleOrder}
-            disabled={isPending || product.quantity === 0}
-            activeOpacity={0.85}
-          >
-            {isPending ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <>
-                <Ionicons name="bag-outline" size={14} color="#fff" />
-                <Text style={s.orderButtonText}>Order</Text>
-              </>
-            )}
-          </TouchableOpacity>
-        </View>
+        ) : null}
       </View>
     </TouchableOpacity>
   );
@@ -194,16 +206,25 @@ const s = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     elevation: 2,
   },
+  cardExpired: { opacity: 0.92 },
 
   // Image
   imageContainer: { width: "100%", height: 160, backgroundColor: "#f0f0f0" },
   image: { width: "100%", height: "100%" },
+  imageBlurred: { transform: [{ scale: 1.05 }] },
   soldOutOverlay: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: "rgba(0,0,0,0.6)",
-    alignItems: "center", justifyContent: "center",
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    alignItems: "center",
+    justifyContent: "center",
   },
-  soldOutText: { color: "#fff", fontWeight: "700", fontSize: 14 },
+  soldOutBadge: {
+    backgroundColor: "rgba(255,255,255,0.95)",
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  soldOutText: { color: "#1e293b", fontWeight: "700", fontSize: 12 },
 
   badgesRow: { position: "absolute", top: 8, left: 8, flexDirection: "row", gap: 6 },
   discountBadge: {
@@ -235,6 +256,7 @@ const s = StyleSheet.create({
 
   // Content
   content: { padding: 12, gap: 8 },
+  contentBlurred: { opacity: 0.55 },
   storeName: { fontSize: 15, fontWeight: "800", color: "#111", marginBottom: 2 },
   productName: { fontSize: 12, color: "#888" },
 

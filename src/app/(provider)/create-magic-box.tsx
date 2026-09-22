@@ -17,6 +17,7 @@ import { ScreenHeader } from "@/components/ScreenHeader";
 import { theme } from "@/lib/theme";
 import Toast from "react-native-toast-message";
 import { Ionicons } from "@expo/vector-icons";
+import { safeGoBack } from "@/lib/navigation";
 
 type RescuePackSize = "small" | "medium" | "large";
 
@@ -96,7 +97,7 @@ export default function CreateMagicBox() {
 
   return (
     <View style={styles.container}>
-      <ScreenHeader title={t("create_magic_box.title") || "Create Rescue Pack"} onBack={() => router.back()} />
+      <ScreenHeader title={t("create_magic_box.title") || "Create Rescue Pack"} onBack={() => safeGoBack(router, "/(provider)/dashboard")} />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text style={styles.subtitle}>{t("create_magic_box.subtitle")}</Text>
 

@@ -49,6 +49,7 @@ export default function SignIn() {
   const [resetCode, setResetCode] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
 
   useEffect(() => {
     if (mode === "signup") setIsSignUp(true);
@@ -343,11 +344,14 @@ export default function SignIn() {
       );
       if (response.reset) {
         showSuccess(t("signin.reset_password_success"));
+        setEmail(forgotPasswordEmail.trim());
+        setPassword("");
         setView("main");
         setIsSignUp(false);
         setResetCode("");
         setNewPassword("");
         setConfirmNewPassword("");
+        setShowNewPassword(false);
       } else {
         throw new Error(t("signin.reset_password_error"));
       }
@@ -467,8 +471,15 @@ export default function SignIn() {
       )}
 
       {!isSignUp && (
-        <TouchableOpacity onPress={() => { setForgotPasswordEmail(email); setView("forgot"); }}>
-          <Text style={styles.forgotLink}>{t("signin.forgot_password")}</Text>
+        <TouchableOpacity
+          onPress={() => {
+            setForgotPasswordEmail(email);
+            setView("forgot");
+          }}
+        >
+          <Text style={styles.forgotLink}>
+            {t("signin.forgot_password") || "Forgot password?"}
+          </Text>
         </TouchableOpacity>
       )}
 
@@ -570,7 +581,9 @@ export default function SignIn() {
         {submitting ? (
           <ActivityIndicator color="#fff" />
         ) : (
-          <Text style={styles.primaryButtonText}>{t("signin.forgot_password_send") || "Send reset code"}</Text>
+          <Text style={styles.primaryButtonText}>
+            {t("signin.forgot_password_send") || t("signin.forgot_password_send_code") || "Send reset code"}
+          </Text>
         )}
       </TouchableOpacity>
       <TouchableOpacity onPress={() => setView("main")} style={styles.linkBtn}>
@@ -582,7 +595,10 @@ export default function SignIn() {
   const renderReset = () => (
     <>
       <Text style={styles.viewTitle}>{t("signin.reset_password_title")}</Text>
-      <Text style={styles.viewDesc}>{t("signin.reset_password_desc")}</Text>
+      <Text style={styles.viewDesc}>
+        {t("signin.reset_password_desc")}{" "}
+        <Text style={styles.emailHighlight}>{forgotPasswordEmail}</Text>
+      </Text>
       <View style={styles.fieldGroup}>
         <Text style={styles.label}>{t("signin.reset_password_code_label")}</Text>
         <TextInput
@@ -602,6 +618,8 @@ export default function SignIn() {
           onChangeText={setNewPassword}
           placeholder={t("signin.reset_password_new_placeholder")}
           secure
+          showPassword={showNewPassword}
+          onTogglePassword={() => setShowNewPassword(!showNewPassword)}
         />
       </View>
       <View style={styles.fieldGroup}>
@@ -612,6 +630,8 @@ export default function SignIn() {
           onChangeText={setConfirmNewPassword}
           placeholder={t("signin.reset_password_confirm_placeholder")}
           secure
+          showPassword={showNewPassword}
+          onTogglePassword={() => setShowNewPassword(!showNewPassword)}
         />
       </View>
       <TouchableOpacity

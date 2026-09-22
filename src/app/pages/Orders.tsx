@@ -12,6 +12,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { formatPrice } from "@/utils/formatPrice";
 import Toast from "react-native-toast-message";
 import QRCode from "react-native-qrcode-svg";
+import { FALLBACK_IMAGE } from "@/lib/asset-uri";
 
 // Enable LayoutAnimation on Android
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -19,7 +20,6 @@ if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental
 }
 
 const PRIMARY = "#16a34a";
-const FALLBACK_IMAGE = "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&q=80";
 
 // ─── Status config ─────────────────────────────────────────────────────────────
 function getStatusConfig(status: string) {

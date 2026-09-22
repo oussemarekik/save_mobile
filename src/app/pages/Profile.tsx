@@ -10,7 +10,7 @@ import { Ionicons } from "@expo/vector-icons";
 import Toast from "react-native-toast-message";
 import { theme } from "@/lib/theme";
 import { formatPriceValue } from "@/utils/formatPrice";
-import { APP_VERSION, BUILD_NUMBER } from "@/lib/constants";
+import { APP_VERSION, BUILD_NUMBER, co2SavedFromMeals } from "@/lib/constants";
 import { writeAuthIntentRole } from "@/lib/authIntent";
 
 export default function Profile() {
@@ -21,7 +21,7 @@ export default function Profile() {
 
   const collectedOrders = orders?.filter((o: any) => o.status === "confirmed" && o.collectedAt) || [];
   const mealsSaved = collectedOrders.length;
-  const co2Saved = mealsSaved * 2.5;
+  const co2Saved = co2SavedFromMeals(mealsSaved);
   const moneySaved = collectedOrders.reduce((sum: number, order: any) => {
     const original = order.product?.originalPrice || 0;
     const price = order.totalPrice || order.product?.price || 0;

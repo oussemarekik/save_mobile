@@ -4,13 +4,14 @@ import {
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useLanguage } from "@/context/LanguageContext";
-import { usersApi, offersApi } from "@/lib/api-client";
-import { transformOfferToProduct } from "@/lib/api-client";
+import { usersApi, offersApi, transformOfferToProduct, buildImageUrl } from "@/lib/api-client";
 import { isOfferExpired } from "@/utils/offerUtils";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { BagCard } from "@/components/BagCard";
 import { theme } from "@/lib/theme";
 import { Ionicons } from "@expo/vector-icons";
+
+const DEFAULT_PROFILE_IMAGE = require("@/assets/images/logoOnly.png");
 
 export default function SearchScreen() {
   const { query: initialQuery } = useLocalSearchParams<{ query?: string }>();
@@ -85,26 +86,27 @@ export default function SearchScreen() {
         {businessResults.length > 0 && (
           <>
             <Text style={styles.sectionTitle}>{t("search.businesses") || "Businesses"}</Text>
-            {businessResults.map((b) => (
-              <TouchableOpacity
-                key={b.id}
-                style={styles.businessCard}
-                onPress={() => router.push(`/business/${b.id}` as any)}
-              >
-                {b.profileImage ? (
-                  <Image source={{ uri: b.profileImage }} style={styles.businessAvatar} />
-                ) : (
-                  <View style={[styles.businessAvatar, styles.avatarPlaceholder]}>
-                    <Ionicons name="storefront-outline" size={20} color={theme.primary} />
+            {businessResults.map((b) => {
+              const avatarUri = buildImageUrl(b.profileImage);
+              return (
+                <TouchableOpacity
+                  key={b.id}
+                  style={styles.businessCard}
+                  onPress={() => router.push(`/business/${b.id}` as any)}
+                >
+                  <Image
+                    source={avatarUri ? { uri: avatarUri } : DEFAULT_PROFILE_IMAGE}
+                    style={styles.businessAvatar}
+                    defaultSource={DEFAULT_PROFILE_IMAGE}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.businessName}>{b.username}</Text>
+                    {b.location ? <Text style={styles.businessLoc}>{b.location}</Text> : null}
                   </View>
-                )}
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.businessName}>{b.username}</Text>
-                  {b.location ? <Text style={styles.businessLoc}>{b.location}</Text> : null}
-                </View>
-                <Ionicons name="chevron-forward" size={18} color={theme.muted} />
-              </TouchableOpacity>
-            ))}
+                  <Ionicons name="chevron-forward" size={18} color={theme.muted} />
+                </TouchableOpacity>
+              );
+            })}
           </>
         )}
 
@@ -153,8 +155,7 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
     marginBottom: 8,
   },
-  businessAvatar: { width: 48, height: 48, borderRadius: 24 },
-  avatarPlaceholder: { backgroundColor: theme.primaryBg, alignItems: "center", justifyContent: "center" },
+  businessAvatar: { width: 48, height: 48, borderRadius: 24, backgroundColor: theme.primaryBg },
   businessName: { fontWeight: "700", fontSize: 15, color: theme.foreground },
   businessLoc: { fontSize: 12, color: theme.muted, marginTop: 2 },
   empty: { textAlign: "center", color: theme.muted, marginTop: 40 },

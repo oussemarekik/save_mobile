@@ -11,6 +11,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { WebView } from "react-native-webview";
 import { Ionicons } from "@expo/vector-icons";
 import { LEGAL_PAGES } from "@/lib/constants";
+import { safeGoBack } from "@/lib/navigation";
 
 const PAGE_TITLES: Record<string, string> = {
   privacy: "Privacy Policy",
@@ -29,7 +30,7 @@ export default function LegalPage() {
     return (
       <View style={styles.centered}>
         <Text style={styles.errorText}>Page not found</Text>
-        <TouchableOpacity onPress={() => router.back()}>
+        <TouchableOpacity onPress={() => safeGoBack(router, "/")}>
           <Text style={styles.link}>Go back</Text>
         </TouchableOpacity>
       </View>
@@ -39,7 +40,7 @@ export default function LegalPage() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.backButton} onPress={() => safeGoBack(router, "/")}>
           <Ionicons name="arrow-back" size={22} color="#111" />
         </TouchableOpacity>
         <Text style={styles.title}>{title}</Text>

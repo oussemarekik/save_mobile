@@ -18,6 +18,7 @@ import { formatPrice, formatPriceValue } from "@/utils/formatPrice";
 import { useLanguage } from "@/context/LanguageContext";
 import { ProviderPendingBanner } from "@/components/provider/ProviderPendingBanner";
 import { ProviderQRScannerModal } from "@/components/provider/ProviderQRScannerModal";
+import { LocationAutocomplete, generateMapsLink, type SelectedPlace } from "@/components/LocationAutocomplete";
 import { filterOffers, getOfferStats, type OfferFilter } from "@/utils/offerUtils";
 
 const PRIMARY = "#16a34a";
@@ -780,9 +781,58 @@ function ProfileEditModal({ user, onClose, onSuccess }: { user: any; onClose: ()
   const { t } = useLanguage();
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
-    username: user?.username || "", location: user?.location || "",
-    phoneNumber: user?.phoneNumber?.toString() || "", mapsLink: user?.mapsLink || "",
+    username: user?.username || "",
+    location: user?.location || "",
+    phoneNumber: user?.phoneNumber?.toString() || "",
+    mapsLink: user?.mapsLink || "",
+    latitude: (user?.latitude ?? null) as number | null,
+    longitude: (user?.longitude ?? null) as number | null,
   });
+
+  const syncFromMapsLink = async (mapsLink: string) => {
+    const trimmed = mapsLink.trim();
+    if (!trimmed) return;
+    try {
+      const data = await usersApi.extractLocation(trimmed);
+      if (data?.locationName) {
+        setFormData((prev) => ({
+          ...prev,
+          mapsLink,
+          username: data.locationName!,
+          location: data.locationName!,
+          latitude: data.latitude ?? prev.latitude,
+          longitude: data.longitude ?? prev.longitude,
+        }));
+      }
+    } catch {
+      // Non-blocking: user can still edit fields manually
+    }
+  };
+
+  const handleLocationChange = (locationName: string, place?: SelectedPlace) => {
+    setFormData((prev) => {
+      const lat = place?.latitude ?? null;
+      const lng = place?.longitude ?? null;
+      const mapsLink = locationName.trim()
+        ? generateMapsLink(locationName.trim(), prev.username, lat, lng, place?.placeId)
+        : "";
+      return {
+        ...prev,
+        location: locationName,
+        latitude: lat,
+        longitude: lng,
+        mapsLink,
+        username: !prev.username.trim() && place?.name ? place.name : prev.username,
+      };
+    });
+  };
+
+  const handleFieldChange = (key: string, value: string) => {
+    setFormData((prev) => ({ ...prev, [key]: value }));
+    if (key === "mapsLink") {
+      syncFromMapsLink(value);
+    }
+  };
 
   const handleSubmit = async () => {
     setIsLoading(true);
@@ -792,12 +842,16 @@ function ProfileEditModal({ user, onClose, onSuccess }: { user: any; onClose: ()
         location?: string;
         phoneNumber?: number;
         mapsLink?: string;
+        latitude?: number | null;
+        longitude?: number | null;
       } = {};
       if (formData.username.trim()) update.username = formData.username.trim();
       if (formData.location.trim()) update.location = formData.location.trim();
       const phoneDigits = formData.phoneNumber.replace(/\D/g, "");
       if (phoneDigits) update.phoneNumber = parseInt(phoneDigits, 10);
       if (formData.mapsLink.trim()) update.mapsLink = formData.mapsLink.trim();
+      if (formData.latitude != null) update.latitude = formData.latitude;
+      if (formData.longitude != null) update.longitude = formData.longitude;
       await usersApi.updateProfile(update);
       Toast.show({
         type: "success",
@@ -813,22 +867,48 @@ function ProfileEditModal({ user, onClose, onSuccess }: { user: any; onClose: ()
   return (
     <BottomSheet onClose={onClose}>
       <ModalHeader title={t("provider.dashboard.edit_business_profile")} onClose={onClose} />
-      {[
-        { label: t("provider.dashboard.business_name"), icon: "person-outline", key: "username", placeholder: t("provider.dashboard.business_name_placeholder") },
-        { label: t("provider.dashboard.address"), icon: "location-outline", key: "location", placeholder: t("provider.dashboard.address_placeholder") },
-        { label: t("provider.profile.edit_dialog.phone_number"), icon: "call-outline", key: "phoneNumber", placeholder: t("provider.dashboard.phone_placeholder") },
-        { label: t("provider.profile.edit_dialog.maps_link"), icon: "map-outline", key: "mapsLink", placeholder: t("provider.profile.edit_dialog.maps_placeholder") },
-      ].map((f) => (
-        <Field key={f.key} label={f.label}>
-          <View style={styles.inputWrapper}>
-            <Ionicons name={f.icon as any} size={16} color="#888" style={{ marginRight: 8 }} />
-            <TextInput style={[styles.input, { flex: 1, marginBottom: 0 }]}
-              value={formData[f.key as keyof typeof formData]}
-              onChangeText={(v) => setFormData({ ...formData, [f.key]: v })}
-              placeholder={f.placeholder} />
-          </View>
-        </Field>
-      ))}
+      <Field label={t("provider.dashboard.business_name")}>
+        <View style={styles.inputWrapper}>
+          <Ionicons name="person-outline" size={16} color="#888" style={{ marginRight: 8 }} />
+          <TextInput
+            style={[styles.input, { flex: 1, marginBottom: 0 }]}
+            value={formData.username}
+            onChangeText={(v) => handleFieldChange("username", v)}
+            placeholder={t("provider.dashboard.business_name_placeholder")}
+          />
+        </View>
+      </Field>
+      <Field label={t("provider.dashboard.address")}>
+        <LocationAutocomplete
+          value={formData.location}
+          onChange={handleLocationChange}
+          placeholder={t("business_signup.location_search_placeholder") || t("provider.dashboard.address_placeholder")}
+        />
+      </Field>
+      <Field label={t("provider.profile.edit_dialog.phone_number")}>
+        <View style={styles.inputWrapper}>
+          <Ionicons name="call-outline" size={16} color="#888" style={{ marginRight: 8 }} />
+          <TextInput
+            style={[styles.input, { flex: 1, marginBottom: 0 }]}
+            value={formData.phoneNumber}
+            onChangeText={(v) => handleFieldChange("phoneNumber", v)}
+            placeholder={t("provider.dashboard.phone_placeholder")}
+            keyboardType="phone-pad"
+          />
+        </View>
+      </Field>
+      <Field label={t("provider.profile.edit_dialog.maps_link")}>
+        <View style={styles.inputWrapper}>
+          <Ionicons name="map-outline" size={16} color="#888" style={{ marginRight: 8 }} />
+          <TextInput
+            style={[styles.input, { flex: 1, marginBottom: 0 }]}
+            value={formData.mapsLink}
+            onChangeText={(v) => handleFieldChange("mapsLink", v)}
+            placeholder={t("provider.profile.edit_dialog.maps_placeholder")}
+            autoCapitalize="none"
+          />
+        </View>
+      </Field>
       <ModalButtons onCancel={onClose} onSubmit={handleSubmit} isLoading={isLoading}
         submitLabel={t("offer_card.save_changes")} loadingLabel={t("offer_card.saving")} />
     </BottomSheet>

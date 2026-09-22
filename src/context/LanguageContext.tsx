@@ -21,6 +21,27 @@ interface LanguageContextType {
 }
 
 const localeMap: Record<Language, Record<string, unknown>> = { en, fr };
+
+function translate(
+  translations: Record<string, unknown>,
+  key: string,
+  params?: Record<string, string | number>
+): string {
+  const keys = key.split(".");
+  let value: unknown = translations;
+  for (const k of keys) {
+    value = (value as Record<string, unknown>)?.[k];
+  }
+
+  let result = typeof value === "string" ? value : "";
+  if (params && result) {
+    Object.keys(params).forEach((param) => {
+      result = result.replace(new RegExp(`\\{${param}\\}`, "g"), String(params[param]));
+    });
+  }
+  return result;
+}
+
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
@@ -28,10 +49,11 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    AsyncStorage.getItem("language").then((saved) => {
-      if (saved === "en" || saved === "fr") setLanguageState(saved);
-      setIsLoading(false);
-    });
+    AsyncStorage.getItem("language")
+      .then((saved) => {
+        if (saved === "en" || saved === "fr") setLanguageState(saved);
+      })
+      .finally(() => setIsLoading(false));
   }, []);
 
   const setLanguage = useCallback((lang: Language) => {
@@ -39,24 +61,11 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     AsyncStorage.setItem("language", lang);
   }, []);
 
-  const translations = localeMap[language];
+  const translations = localeMap[language] || localeMap.fr;
 
   const t = useCallback(
-    (key: string, params?: Record<string, string | number>): string => {
-      const keys = key.split(".");
-      let value: unknown = translations;
-      for (const k of keys) {
-        value = (value as Record<string, unknown>)?.[k];
-      }
-
-      let result = typeof value === "string" ? value : "";
-      if (params && result) {
-        Object.keys(params).forEach((param) => {
-          result = result.replace(new RegExp(`\\{${param}\\}`, "g"), String(params[param]));
-        });
-      }
-      return result;
-    },
+    (key: string, params?: Record<string, string | number>): string =>
+      translate(translations, key, params),
     [translations]
   );
 
@@ -70,6 +79,13 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
 
 export function useLanguage() {
   const context = useContext(LanguageContext);
-  if (!context) throw new Error("useLanguage must be used within a LanguageProvider");
-  return context;
+  if (context) return context;
+
+  return {
+    language: "fr" as Language,
+    setLanguage: () => {},
+    t: (key: string, params?: Record<string, string | number>) =>
+      translate(localeMap.fr, key, params),
+    isLoading: false,
+  };
 }

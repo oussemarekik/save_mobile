@@ -11,7 +11,11 @@
         "simulator": true
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://savetheplate.tn/api"
+        "EXPO_PUBLIC_API_URL": "https://savetheplate.tn/api",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "997063419161-msv9uo3bshk8882t1qjmd5a9jojqof7c.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID": "997063419161-7h5dmmlljrniqqki48ju54eq31bud2p3.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "997063419161-6pg7v8ueuv4u5ar3tkrb76um6r4e5376.apps.googleusercontent.com",
+        "EXPO_PUBLIC_FACEBOOK_APP_ID": "2359090251275497"
       }
     },
     "preview": {
@@ -23,13 +27,21 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://savetheplate.tn/api"
+        "EXPO_PUBLIC_API_URL": "https://savetheplate.tn/api",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "997063419161-msv9uo3bshk8882t1qjmd5a9jojqof7c.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID": "997063419161-7h5dmmlljrniqqki48ju54eq31bud2p3.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "997063419161-6pg7v8ueuv4u5ar3tkrb76um6r4e5376.apps.googleusercontent.com",
+        "EXPO_PUBLIC_FACEBOOK_APP_ID": "2359090251275497"
       }
     },
     "production": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://savetheplate.tn/api"
+        "EXPO_PUBLIC_API_URL": "https://savetheplate.tn/api",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "997063419161-msv9uo3bshk8882t1qjmd5a9jojqof7c.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID": "997063419161-7h5dmmlljrniqqki48ju54eq31bud2p3.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "997063419161-6pg7v8ueuv4u5ar3tkrb76um6r4e5376.apps.googleusercontent.com",
+        "EXPO_PUBLIC_FACEBOOK_APP_ID": "2359090251275497"
       }
     }
   },

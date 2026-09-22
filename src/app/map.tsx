@@ -7,6 +7,7 @@ import { useLanguage } from "@/context/LanguageContext";
 import { useProducts } from "@/hooks/use-shop";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { theme } from "@/lib/theme";
+import { safeGoBack } from "@/lib/navigation";
 
 export default function MapScreen() {
   const { t } = useLanguage();
@@ -56,7 +57,7 @@ export default function MapScreen() {
           })}
         </MapView>
       )}
-      <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+      <TouchableOpacity style={styles.backBtn} onPress={() => safeGoBack(router, "/(client)/Home")}>
         <Text style={styles.backText}>{t("common.back") || "Back"}</Text>
       </TouchableOpacity>
     </View>

@@ -19,16 +19,11 @@ import { theme } from "@/lib/theme";
 import Toast from "react-native-toast-message";
 import { sanitizeErrorMessage } from "@/utils/errorUtils";
 import { writeAuthIntentRole } from "@/lib/authIntent";
+import { LocationAutocomplete, generateMapsLink, type SelectedPlace } from "@/components/LocationAutocomplete";
+import { safeGoBack } from "@/lib/navigation";
 
 function normalizePhoneNumber(value: string) {
   return value.replace(/\D/g, "");
-}
-
-function generateMapsLink(locationName: string, businessName?: string): string {
-  const query = businessName
-    ? `${encodeURIComponent(businessName)} ${encodeURIComponent(locationName)}`
-    : encodeURIComponent(locationName);
-  return `https://www.google.com/maps/search/?api=1&query=${query}`;
 }
 
 export default function ProviderSignup() {
@@ -53,18 +48,62 @@ export default function ProviderSignup() {
     phoneNumber: "",
     password: "",
     confirmPassword: "",
+    latitude: null as number | null,
+    longitude: null as number | null,
+    placeId: "",
   });
 
   const updateField = (name: keyof typeof formData, value: string) => {
     setFormData((prev) => {
       const next = { ...prev, [name]: value };
-      if (name === "location" && value.trim()) {
-        next.mapsLink = generateMapsLink(value.trim(), prev.businessName);
-      }
       if (name === "businessName" && prev.location.trim()) {
-        next.mapsLink = generateMapsLink(prev.location.trim(), value.trim());
+        next.mapsLink = generateMapsLink(
+          prev.location.trim(),
+          value.trim(),
+          prev.latitude,
+          prev.longitude,
+          prev.placeId
+        );
       }
       return next;
+    });
+    setErrorMessage("");
+  };
+
+  const handleLocationChange = (locationName: string, place?: SelectedPlace) => {
+    const extractedBusinessName = place?.name?.trim() || "";
+    const lat = place?.latitude ?? null;
+    const lng = place?.longitude ?? null;
+    const placeId = place?.placeId || "";
+
+    setFormData((prev) => {
+      const isBusinessNameEmpty = !prev.businessName.trim();
+      const isLocationChanging = locationName !== prev.location;
+      const isLocationCleared = !locationName.trim();
+      const wasBusinessNameFromLocation = prev.businessName.trim() === prev.location.trim();
+
+      let businessName = prev.businessName;
+      if (isLocationCleared) {
+        businessName = "";
+      } else if (isBusinessNameEmpty) {
+        businessName = extractedBusinessName;
+      } else if (extractedBusinessName && isLocationChanging && wasBusinessNameFromLocation) {
+        businessName = extractedBusinessName;
+      }
+
+      const mapsLink = locationName.trim()
+        ? generateMapsLink(locationName.trim(), businessName, lat, lng, placeId)
+        : "";
+
+      return {
+        ...prev,
+        location: locationName,
+        latitude: lat,
+        longitude: lng,
+        placeId,
+        mapsLink,
+        businessName,
+      };
     });
     setErrorMessage("");
   };
@@ -153,6 +192,8 @@ export default function ProviderSignup() {
         username: formData.businessName.trim(),
         location: formData.location.trim(),
         mapsLink: formData.mapsLink.trim(),
+        latitude: formData.latitude,
+        longitude: formData.longitude,
       });
 
       if (!signupResponse.accessToken) throw new Error("Invalid response from server");
@@ -165,6 +206,8 @@ export default function ProviderSignup() {
         phoneNumber: phoneForBackend,
         mapsLink: formData.mapsLink.trim(),
         location: formData.location.trim(),
+        latitude: formData.latitude ?? undefined,
+        longitude: formData.longitude ?? undefined,
       });
 
       const authedUser = await refreshAuth();
@@ -230,7 +273,7 @@ export default function ProviderSignup() {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       <View style={styles.topBar}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+        <TouchableOpacity onPress={() => safeGoBack(router, "/(auth)/signin")} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color="#111" />
         </TouchableOpacity>
         <Text style={styles.topTitle}>{t("business_signup.title")}</Text>
@@ -245,23 +288,38 @@ export default function ProviderSignup() {
           </View>
         ) : null}
 
+        <View style={styles.field}>
+          <Text style={styles.label}>
+            {t("business_signup.address") || "Business Location"}
+          </Text>
+          <LocationAutocomplete
+            value={formData.location}
+            onChange={handleLocationChange}
+            placeholder={
+              t("business_signup.location_search_placeholder") ||
+              "Search for your business location..."
+            }
+          />
+          <Text style={styles.hint}>
+            {t("business_signup.location_search_hint") ||
+              "Start typing your business name or address. A Google Maps link will be generated automatically."}
+          </Text>
+        </View>
+        {formData.mapsLink ? (
+          <Text style={styles.mapsPreview} numberOfLines={2}>
+            Maps: {formData.mapsLink}
+          </Text>
+        ) : null}
         <Field
           label={t("business_signup.business_name")}
           value={formData.businessName}
           onChangeText={(v) => updateField("businessName", v)}
           placeholder={t("business_signup.business_name_placeholder")}
         />
-        <Field
-          label="Business Location"
-          value={formData.location}
-          onChangeText={(v) => updateField("location", v)}
-          placeholder="123 Main St, Tunis"
-        />
-        {formData.mapsLink ? (
-          <Text style={styles.mapsPreview} numberOfLines={2}>
-            Maps: {formData.mapsLink}
-          </Text>
-        ) : null}
+        <Text style={[styles.hint, { marginTop: -8, marginBottom: 16 }]}>
+          {t("business_signup.business_name_from_location_hint") ||
+            "Business name is filled automatically when you pick a location."}
+        </Text>
         <Field
           label={t("business_signup.email")}
           value={formData.email}
@@ -433,6 +491,7 @@ const styles = StyleSheet.create({
     color: "#111",
   },
   mapsPreview: { fontSize: 11, color: theme.muted, marginTop: -8, marginBottom: 12 },
+  hint: { fontSize: 12, color: theme.muted, marginTop: 6, lineHeight: 18 },
   termsRow: { flexDirection: "row", alignItems: "flex-start", gap: 10, marginBottom: 20 },
   termsText: { flex: 1, fontSize: 13, color: "#555", lineHeight: 20 },
   termsLink: { color: theme.primary, fontWeight: "700", textDecorationLine: "underline" },

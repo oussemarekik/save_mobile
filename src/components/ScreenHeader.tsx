@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Platform } from "react-native
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { theme } from "@/lib/theme";
+import { safeGoBack } from "@/lib/navigation";
 
 export function ScreenHeader({
   title,
@@ -16,7 +17,7 @@ export function ScreenHeader({
   const router = useRouter();
   return (
     <View style={styles.header}>
-      <TouchableOpacity style={styles.backButton} onPress={onBack ?? (() => router.back())}>
+      <TouchableOpacity style={styles.backButton} onPress={onBack ?? (() => safeGoBack(router, "/"))}>
         <Ionicons name="arrow-back" size={20} color={theme.foreground} />
       </TouchableOpacity>
       <View style={styles.textWrap}>

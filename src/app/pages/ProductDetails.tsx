@@ -13,6 +13,7 @@ import Toast from "react-native-toast-message";
 import { formatPrice } from "@/utils/formatPrice";
 import { isOfferExpired } from "@/utils/offerUtils";
 import { sanitizeErrorMessage } from "@/utils/errorUtils";
+import { safeGoBack } from "@/lib/navigation";
 
 const PRIMARY = "#16a34a";
 
@@ -141,7 +142,7 @@ export default function ProductDetails({ id }: Props) {
 
           {/* Header Actions */}
           <View style={[styles.heroActions, { paddingTop: insets.top + 8 }]}>
-            <TouchableOpacity style={styles.heroButton} onPress={() => router.back()}>
+            <TouchableOpacity style={styles.heroButton} onPress={() => safeGoBack(router, "/(client)/Home")}>
               <Ionicons name="chevron-back" size={24} color="#fff" />
             </TouchableOpacity>
             <View style={styles.heroActionRight}>

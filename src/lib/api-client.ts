@@ -4,8 +4,12 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
+import { googlePlaceDetails, googlePlacesAutocomplete } from "@/lib/google-places";
 import { ApiError, extractMessageFromApiBody } from "@/utils/errorUtils";
 import { normalizeUploadFile } from "@/lib/upload-file";
+import { FALLBACK_IMAGE } from "@/lib/asset-uri";
+
+export { FALLBACK_IMAGE };
 
 const DEFAULT_API_BASE_URL =
   Platform.select({
@@ -307,6 +311,7 @@ export const usersApi = {
   updateProfile: async (data: {
     username?: string; location?: string; phoneNumber?: string | number;
     profileImage?: string; mapsLink?: string;
+    latitude?: number | null; longitude?: number | null;
   }) => apiRequest<any>("/users/me", { method: "POST", body: JSON.stringify(data) }),
 
   setRole: async (role: "CLIENT" | "PROVIDER") =>
@@ -332,6 +337,52 @@ export const usersApi = {
     apiRequest<{ city?: string; state?: string; locationName?: string }>(
       `/users/reverse-geocode?lat=${lat}&lon=${lon}`
     ),
+
+  extractLocation: async (mapsLink: string) =>
+    apiRequest<{ locationName?: string; latitude?: number; longitude?: number }>(
+      "/users/extract-location",
+      { method: "POST", body: JSON.stringify({ mapsLink }) }
+    ),
+
+  placesAutocomplete: async (query: string, language?: string) => {
+    try {
+      const params = new URLSearchParams({ q: query });
+      if (language) params.set("language", language);
+      return await apiRequest<{
+        suggestions: Array<{
+          placeId: string;
+          description: string;
+          mainText: string;
+          secondaryText: string;
+          name?: string;
+          formattedAddress?: string;
+          latitude?: number | null;
+          longitude?: number | null;
+        }>;
+      }>(`/users/places-autocomplete?${params.toString()}`);
+    } catch {
+      const suggestions = await googlePlacesAutocomplete(query, language);
+      return { suggestions };
+    }
+  },
+
+  placeDetails: async (placeId: string, language?: string) => {
+    try {
+      const params = new URLSearchParams({ placeId });
+      if (language) params.set("language", language);
+      return await apiRequest<{
+        placeId: string;
+        name: string;
+        formattedAddress: string;
+        latitude: number | null;
+        longitude: number | null;
+      }>(`/users/place-details?${params.toString()}`);
+    } catch {
+      const place = await googlePlaceDetails(placeId, language);
+      if (!place) throw new Error("Place not found");
+      return place;
+    }
+  },
 };
 
 export const ratingsApi = {
@@ -407,14 +458,12 @@ function extractTimeFromDateTime(dateTime: string | Date | null | undefined, def
   } catch { return defaultTime; }
 }
 
-function buildImageUrl(url: string | null | undefined): string | null {
+export function buildImageUrl(url: string | null | undefined): string | null {
   if (!url) return null;
   if (url.startsWith("http://") || url.startsWith("https://")) return url;
   if (url.startsWith("/")) return `${API_BASE_URL}${url}`;
   return `${API_BASE_URL}/storage/${url}`;
 }
-
-const FALLBACK_IMAGE = "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&q=80";
 
 export function transformOfferToProduct(offer: any): any {
   const owner = offer.owner || {};
