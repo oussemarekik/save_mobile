@@ -46,3 +46,6 @@ example
 .env
 .env.*
 !.env.example
+
+# Google Play / EAS secrets
+google-play-service-account.json

@@ -30,7 +30,10 @@ export default function Browse() {
 
     if (!matchesSearch) return false;
     if (filter === "available") return p.quantity > 0;
-    if (filter === "favorites") return favorites?.includes(p.id);
+    if (filter === "favorites") {
+      const providerId = p.storeId || p.store?.id;
+      return !!providerId && favorites?.includes(providerId);
+    }
     return true;
   });
 

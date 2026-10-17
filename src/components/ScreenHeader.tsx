@@ -9,10 +9,12 @@ export function ScreenHeader({
   title,
   subtitle,
   onBack,
+  right,
 }: {
   title: string;
   subtitle?: string;
   onBack?: () => void;
+  right?: React.ReactNode;
 }) {
   const router = useRouter();
   return (
@@ -24,6 +26,7 @@ export function ScreenHeader({
         <Text style={styles.title}>{title}</Text>
         {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
       </View>
+      {right ? <View style={styles.right}>{right}</View> : null}
     </View>
   );
 }
@@ -50,4 +53,5 @@ const styles = StyleSheet.create({
   textWrap: { flex: 1 },
   title: { fontSize: 22, fontWeight: "800", color: theme.foreground },
   subtitle: { fontSize: 13, color: theme.muted, marginTop: 2 },
+  right: { marginLeft: 8 },
 });

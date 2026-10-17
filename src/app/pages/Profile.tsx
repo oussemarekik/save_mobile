@@ -104,6 +104,7 @@ export default function Profile() {
       <Text style={s.sectionLabel}>{t("profile.account")}</Text>
       <MenuItem icon="person-outline" label={t("profile.accountDetails")} onPress={() => router.push("/account-details" as any)} />
       <MenuItem icon="card-outline" label={t("profile.paymentMethods")} onPress={() => router.push("/payment-methods" as any)} />
+      <MenuItem icon="notifications-outline" label={t("notifications.title") || "Notifications"} onPress={() => router.push("/notifications" as any)} />
       <MenuItem icon="settings-outline" label={t("common.preferences")} onPress={() => router.push("/preferences" as any)} />
 
       <Text style={[s.sectionLabel, { marginTop: 16 }]}>{t("profile.discover")}</Text>

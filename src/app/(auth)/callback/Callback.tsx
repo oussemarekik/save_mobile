@@ -9,10 +9,10 @@ export default function Callback() {
 
   return (
     <View style={styles.container}>
-      <Ionicons name="close-circle-outline" size={64} color={theme.destructive} />
-      <Text style={styles.title}>Verification Unsupported</Text>
+      <Ionicons name="mail-outline" size={64} color={theme.primary} />
+      <Text style={styles.title}>Use email verification</Text>
       <Text style={styles.message}>
-        Magic link sign-in is not supported. Please sign in with email and password.
+        Magic link sign-in is no longer available. Sign in with email and password, or use Google / Facebook.
       </Text>
       <TouchableOpacity style={styles.button} onPress={() => router.replace("/(auth)/signin")}>
         <Text style={styles.buttonText}>Back to Sign In</Text>
@@ -32,7 +32,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 24,
     fontWeight: "800",
-    color: theme.destructive,
+    color: theme.foreground,
     marginTop: 16,
     marginBottom: 8,
     textAlign: "center",

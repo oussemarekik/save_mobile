@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from "react";
+import React from "react";
 import {
   View, Text, Image, TouchableOpacity, ScrollView,
   StyleSheet, ActivityIndicator, Share, Linking,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useQuery } from "@tanstack/react-query";
 import { useProduct, useCreateOrder, useFavorites, useToggleFavorite } from "@/hooks/use-shop";
 import { useAuth } from "@/hooks/use-auth";
 import { useLanguage } from "@/context/LanguageContext";
@@ -14,6 +15,7 @@ import { formatPrice } from "@/utils/formatPrice";
 import { isOfferExpired } from "@/utils/offerUtils";
 import { sanitizeErrorMessage } from "@/utils/errorUtils";
 import { safeGoBack } from "@/lib/navigation";
+import { ratingsApi } from "@/lib/api-client";
 
 const PRIMARY = "#16a34a";
 
@@ -33,13 +35,15 @@ export default function ProductDetails({ id }: Props) {
   const { data: favorites } = useFavorites();
   const { mutate: toggleFavorite } = useToggleFavorite();
 
-  const [isFavorite, setIsFavorite] = useState(false);
+  const providerId = product?.storeId || product?.store?.id;
+  const isFavorite = !!providerId && (favorites?.includes(providerId) || false);
 
-  useEffect(() => {
-    if (favorites && productId) {
-      setIsFavorite(favorites.includes(productId));
-    }
-  }, [favorites, productId]);
+  const { data: ratingData } = useQuery({
+    queryKey: ["provider-rating", providerId],
+    queryFn: () => ratingsApi.getProviderAverage(providerId as number),
+    enabled: !!providerId,
+    retry: 1,
+  });
 
   // ── Loading ──────────────────────────────────────────────────────────────────
   if (isLoading) {
@@ -103,13 +107,22 @@ export default function ProductDetails({ id }: Props) {
   };
 
   const handleFavorite = () => {
-    toggleFavorite(productId);
-    setIsFavorite(!isFavorite);
+    if (!isAuthenticated) {
+      Toast.show({ type: "error", text1: "Sign in required", text2: "Please sign in to save favorites" });
+      router.push("/(auth)/signin");
+      return;
+    }
+    if (!providerId) return;
+    toggleFavorite(providerId);
     Toast.show({
       type: "success",
       text1: isFavorite ? "Removed from favorites" : "Added to favorites",
     });
   };
+
+  const averageRating =
+    ratingData?.averageRating != null ? Number(ratingData.averageRating).toFixed(1) : null;
+  const totalRatings = ratingData?.totalRatings ?? 0;
 
   const handleShare = async () => {
     try {
@@ -180,10 +193,16 @@ export default function ProductDetails({ id }: Props) {
             <View style={styles.categoryBadge}>
               <Text style={styles.categoryText}>{product.store.category}</Text>
             </View>
-            <Text style={styles.dot}>•</Text>
-            <Ionicons name="star" size={14} color="#f97316" />
-            <Text style={styles.rating}>{product.store.rating}</Text>
-            <Text style={styles.ratingCount}>(500+)</Text>
+            {averageRating != null && (
+              <>
+                <Text style={styles.dot}>•</Text>
+                <Ionicons name="star" size={14} color="#f97316" />
+                <Text style={styles.rating}>{averageRating}</Text>
+                {totalRatings > 0 && (
+                  <Text style={styles.ratingCount}>({totalRatings})</Text>
+                )}
+              </>
+            )}
           </View>
 
           {/* Pickup Time */}

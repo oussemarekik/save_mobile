@@ -9,13 +9,17 @@ import {
   Linking,
   TouchableOpacity,
 } from "react-native";
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useQuery } from "@tanstack/react-query";
 import { useLanguage } from "@/context/LanguageContext";
-import { usersApi, transformOfferToProduct, buildImageUrl } from "@/lib/api-client";
+import { usersApi, transformOfferToProduct, buildImageUrl, ratingsApi } from "@/lib/api-client";
 import { BagCard } from "@/components/BagCard";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { theme } from "@/lib/theme";
 import { Ionicons } from "@expo/vector-icons";
+import { useAuth } from "@/hooks/use-auth";
+import { useFavorites, useToggleFavorite } from "@/hooks/use-shop";
+import Toast from "react-native-toast-message";
 
 const DEFAULT_PROFILE_IMAGE = require("@/assets/images/logoOnly.png");
 
@@ -46,10 +50,23 @@ function getMapsHref(location?: string | null, mapsLink?: string | null): string
 
 export default function BusinessProfile() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const router = useRouter();
   const { t } = useLanguage();
+  const { isAuthenticated } = useAuth();
+  const { data: favorites } = useFavorites();
+  const { mutate: toggleFavorite } = useToggleFavorite();
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [avatarFailed, setAvatarFailed] = useState(false);
+  const providerId = id ? parseInt(id, 10) : 0;
+  const isFavorited = !!providerId && (favorites?.includes(providerId) || false);
+
+  const { data: ratingData } = useQuery({
+    queryKey: ["provider-rating", providerId],
+    queryFn: () => ratingsApi.getProviderAverage(providerId),
+    enabled: !!providerId,
+    retry: 1,
+  });
 
   useEffect(() => {
     if (!id) return;
@@ -87,6 +104,23 @@ export default function BusinessProfile() {
     avatarUri && !avatarFailed ? { uri: avatarUri } : DEFAULT_PROFILE_IMAGE;
   const displayAddress = getDisplayAddress(business.location);
   const mapsHref = getMapsHref(business.location, business.mapsLink);
+  const averageRating =
+    ratingData?.averageRating != null ? Number(ratingData.averageRating).toFixed(1) : null;
+  const totalRatings = ratingData?.totalRatings ?? 0;
+
+  const handleFavorite = () => {
+    if (!isAuthenticated) {
+      Toast.show({
+        type: "error",
+        text1: t("common.signIn") || "Sign in required",
+        text2: t("auth.signInToOrder") || "Please sign in to save favorites",
+      });
+      router.push("/(auth)/signin");
+      return;
+    }
+    if (!providerId) return;
+    toggleFavorite(providerId);
+  };
 
   return (
     <View style={styles.container}>
@@ -100,6 +134,29 @@ export default function BusinessProfile() {
           />
 
           <Text style={styles.name}>{business.username}</Text>
+
+          {averageRating != null && (
+            <View style={styles.ratingRow}>
+              <Ionicons name="star" size={14} color="#f97316" />
+              <Text style={styles.ratingText}>{averageRating}</Text>
+              {totalRatings > 0 && (
+                <Text style={styles.ratingCount}>({totalRatings})</Text>
+              )}
+            </View>
+          )}
+
+          <TouchableOpacity style={styles.favoriteButton} onPress={handleFavorite} activeOpacity={0.85}>
+            <Ionicons
+              name={isFavorited ? "heart" : "heart-outline"}
+              size={18}
+              color={isFavorited ? "#ef4444" : theme.primary}
+            />
+            <Text style={[styles.favoriteText, isFavorited && styles.favoriteTextActive]}>
+              {isFavorited
+                ? (t("business.favorited") || "Favorited")
+                : (t("business.favorite") || "Favorite")}
+            </Text>
+          </TouchableOpacity>
 
           {(displayAddress || mapsHref) ? (
             <View style={styles.locationBlock}>
@@ -179,6 +236,23 @@ const styles = StyleSheet.create({
     textAlign: "center",
     paddingHorizontal: 8,
   },
+  ratingRow: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 8 },
+  ratingText: { fontWeight: "700", color: theme.foreground },
+  ratingCount: { color: theme.muted, fontSize: 13 },
+  favoriteButton: {
+    marginTop: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: theme.primaryBorder,
+    backgroundColor: theme.primaryBg,
+  },
+  favoriteText: { fontWeight: "700", color: theme.primary, fontSize: 13 },
+  favoriteTextActive: { color: "#ef4444" },
   locationBlock: {
     marginTop: 10,
     alignItems: "center",

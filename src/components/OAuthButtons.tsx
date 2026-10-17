@@ -32,7 +32,7 @@ const hasGoogleConfig = !!(
 
 async function completeSocialSignIn(options: {
   authenticate: () => Promise<unknown>;
-  refreshAuth: () => Promise<void>;
+  refreshAuth: () => Promise<unknown>;
   router: ReturnType<typeof useRouter>;
 }) {
   const { authenticate, refreshAuth, router } = options;
@@ -177,7 +177,8 @@ function GoogleOAuthButtonConfigured() {
       style={styles.button}
       onPress={() => {
         handledRef.current = null;
-        promptAsync();
+        // showInRecents helps Android return to the app after the browser OAuth flow
+        promptAsync({ showInRecents: true });
       }}
       disabled={isLoading || !request}
       activeOpacity={0.85}
@@ -290,7 +291,7 @@ function FacebookOAuthButtonConfigured() {
       style={styles.button}
       onPress={() => {
         handledRef.current = null;
-        promptAsync();
+        promptAsync({ showInRecents: true });
       }}
       disabled={isLoading || !request}
       activeOpacity={0.85}

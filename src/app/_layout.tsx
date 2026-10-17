@@ -3,6 +3,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { LanguageProvider } from "@/context/LanguageContext";
 import Toast from "react-native-toast-message";
+import "@/lib/push-notifications";
 
 export default function RootLayout() {
   return (
@@ -19,6 +20,7 @@ export default function RootLayout() {
           <Stack.Screen name="account-details" />
           <Stack.Screen name="payment-methods" />
           <Stack.Screen name="preferences" />
+          <Stack.Screen name="notifications" />
           <Stack.Screen name="impact" />
           <Stack.Screen name="contact" />
           <Stack.Screen name="help-support" />

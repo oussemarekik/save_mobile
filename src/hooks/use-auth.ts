@@ -2,6 +2,10 @@ import { useEffect, useSyncExternalStore } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { authApi, tokenStorage } from "@/lib/api-client";
 import { clearAuthSession } from "@/lib/auth-session";
+import {
+  syncPushRegistrationIfEnabled,
+  unregisterPushNotifications,
+} from "@/lib/push-notifications";
 
 export type AuthenticatedUser = {
   id: number;
@@ -59,6 +63,7 @@ async function fetchUser(): Promise<AuthenticatedUser | null> {
 }
 
 async function logout(): Promise<void> {
+  await unregisterPushNotifications();
   await clearAuthSession();
 }
 
@@ -77,6 +82,12 @@ export function useAuth() {
     staleTime: 1000 * 60 * 5,
     enabled: hasToken === true,
   });
+
+  useEffect(() => {
+    if (hasToken === true && user) {
+      void syncPushRegistrationIfEnabled();
+    }
+  }, [hasToken, user?.id]);
 
   const logoutMutation = useMutation({
     mutationFn: logout,
@@ -98,10 +109,14 @@ export function useAuth() {
       queryClient.setQueryData(["/auth/get-user-by-token"], null);
       return null;
     }
-    return queryClient.fetchQuery({
+    const nextUser = await queryClient.fetchQuery({
       queryKey: ["/auth/get-user-by-token"],
       queryFn: fetchUser,
     });
+    if (nextUser) {
+      void syncPushRegistrationIfEnabled();
+    }
+    return nextUser;
   };
 
   return {

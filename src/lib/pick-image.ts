@@ -1,5 +1,6 @@
-import { Alert } from "react-native";
+import { Alert, Platform } from "react-native";
 import * as ImagePicker from "expo-image-picker";
+import { ensureUploadableUri } from "@/lib/upload-file";
 
 export type PickedImage = {
   uri: string;
@@ -31,15 +32,28 @@ export async function pickImageFromLibrary(): Promise<PickedImage | null> {
 
   let mimeType = asset.mimeType ?? "image/jpeg";
   let fileName = asset.fileName ?? `image_${Date.now()}.jpg`;
-  if (mimeType === "image/jpg" || mimeType === "image/heic" || mimeType === "image/heif") {
+  if (
+    mimeType === "image/jpg" ||
+    mimeType === "image/heic" ||
+    mimeType === "image/heif" ||
+    mimeType === "image"
+  ) {
     mimeType = "image/jpeg";
   }
   if (!/\.(jpe?g|png|gif)$/i.test(fileName)) {
-    fileName = `image_${Date.now()}.jpg`;
+    const ext =
+      mimeType === "image/png" ? "png" : mimeType === "image/gif" ? "gif" : "jpg";
+    fileName = `image_${Date.now()}.${ext}`;
   }
 
+  // Normalize content:// (and similar) to a local file:// URI before upload/preview.
+  const uri =
+    Platform.OS === "web"
+      ? asset.uri
+      : await ensureUploadableUri(asset.uri, fileName);
+
   return {
-    uri: asset.uri,
+    uri,
     mimeType,
     fileName,
   };

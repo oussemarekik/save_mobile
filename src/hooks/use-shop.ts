@@ -1,16 +1,16 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   offersApi,
   ordersApi,
+  favoritesApi,
   transformOfferToProduct,
   transformOrder,
   groupOffersByOwner,
 } from "@/lib/api-client";
+import { useAuth } from "@/hooks/use-auth";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const FAVORITES_KEY = "favorites";
 const FAVORITES_QUERY_KEY = ["favorites"];
 
 // ─── Stores ──────────────────────────────────────────────────────────────────
@@ -106,45 +106,64 @@ export function useCreateOrder() {
   };
 }
 
-// ─── Favorites ────────────────────────────────────────────────────────────────
+// ─── Favorites (provider / business IDs) ──────────────────────────────────────
 
 export function useFavorites() {
+  const { isAuthenticated } = useAuth();
+
   const { data, isLoading, isError } = useQuery({
     queryKey: FAVORITES_QUERY_KEY,
     queryFn: async () => {
-      const raw = await AsyncStorage.getItem(FAVORITES_KEY);
-      return raw ? (JSON.parse(raw) as number[]) : [];
+      const result = await favoritesApi.list();
+      return result.providerIds || [];
     },
+    enabled: isAuthenticated,
+    retry: 1,
   });
 
-  return { data: data ?? [], isLoading, isError };
+  return { data: data ?? [], isLoading: isAuthenticated ? isLoading : false, isError };
 }
 
 export function useToggleFavorite() {
   const queryClient = useQueryClient();
 
   const mutation = useMutation({
-    mutationFn: async (productId: number) => {
-      const raw = await AsyncStorage.getItem(FAVORITES_KEY);
-      const favorites: number[] = raw ? JSON.parse(raw) : [];
-      const index = favorites.indexOf(productId);
+    mutationFn: async (providerId: number) => {
+      const current =
+        (queryClient.getQueryData<number[]>(FAVORITES_QUERY_KEY) as number[] | undefined) || [];
+      const isFavorited = current.includes(providerId);
 
-      if (index > -1) {
-        favorites.splice(index, 1);
-      } else {
-        favorites.push(productId);
+      if (isFavorited) {
+        await favoritesApi.remove(providerId);
+        return current.filter((id) => id !== providerId);
       }
 
-      await AsyncStorage.setItem(FAVORITES_KEY, JSON.stringify(favorites));
-      return favorites;
+      await favoritesApi.add(providerId);
+      return [...current, providerId];
     },
-    onSuccess: () => {
+    onMutate: async (providerId) => {
+      await queryClient.cancelQueries({ queryKey: FAVORITES_QUERY_KEY });
+      const previous = queryClient.getQueryData<number[]>(FAVORITES_QUERY_KEY) || [];
+      const isFavorited = previous.includes(providerId);
+      queryClient.setQueryData(
+        FAVORITES_QUERY_KEY,
+        isFavorited ? previous.filter((id) => id !== providerId) : [...previous, providerId]
+      );
+      return { previous };
+    },
+    onError: (_err, _providerId, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(FAVORITES_QUERY_KEY, context.previous);
+      }
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: FAVORITES_QUERY_KEY });
     },
   });
 
   return {
     mutate: mutation.mutate,
+    mutateAsync: mutation.mutateAsync,
     isPending: mutation.isPending,
     isError: mutation.isError,
   };

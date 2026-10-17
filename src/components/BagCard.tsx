@@ -26,9 +26,11 @@ export function BagCard({ product, store }: BagCardProps) {
   const { mutate: toggleFavorite } = useToggleFavorite();
   const { mutate: createOrder, isPending } = useCreateOrder();
   const { isAuthenticated } = useAuth();
-  const [isFavorited, setIsFavorited] = useState(favorites?.includes(product.id) || false);
   const [imgError, setImgError] = useState(false);
   const { t } = useLanguage();
+
+  const providerId = store?.id || (product as any).storeId;
+  const isFavorited = !!providerId && (favorites?.includes(providerId) || false);
 
   const originalPriceValue = product.originalPrice || 0;
   const priceValue = product.price || 0;
@@ -42,8 +44,17 @@ export function BagCard({ product, store }: BagCardProps) {
   const isUnavailable = product.quantity === 0 || isExpired;
 
   const handleFavorite = () => {
-    toggleFavorite(product.id);
-    setIsFavorited((v) => !v);
+    if (!isAuthenticated) {
+      Toast.show({
+        type: "error",
+        text1: t("common.signIn") || "Sign in required",
+        text2: t("auth.signInToOrder") || "Please sign in to save favorites",
+      });
+      router.push("/(auth)/signin");
+      return;
+    }
+    if (!providerId) return;
+    toggleFavorite(providerId);
   };
 
   const handleOrder = () => {
@@ -88,7 +99,7 @@ export function BagCard({ product, store }: BagCardProps) {
         <Image
           source={
             imgError || !(product.imageUrl || store?.imageUrl)
-              ? DEFAULT_OFFER_IMAGE
+              ? { uri: FALLBACK }
               : { uri: product.imageUrl || store?.imageUrl || FALLBACK }
           }
           style={[s.image, isExpired && s.imageBlurred]}

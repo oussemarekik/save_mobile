@@ -6,7 +6,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 import { googlePlaceDetails, googlePlacesAutocomplete } from "@/lib/google-places";
 import { ApiError, extractMessageFromApiBody } from "@/utils/errorUtils";
-import { normalizeUploadFile } from "@/lib/upload-file";
+import { ensureUploadableUri, normalizeUploadFile } from "@/lib/upload-file";
 import { FALLBACK_IMAGE } from "@/lib/asset-uri";
 
 export { FALLBACK_IMAGE };
@@ -158,24 +158,6 @@ export const authApi = {
       message: string; accessToken: string; refreshToken: string;
       user: { id: number; email: string; role: string } | null; redirectTo: string;
     }>("/auth/signin", { method: "POST", body: JSON.stringify({ email, password }) });
-
-    if (response.accessToken) {
-      await tokenStorage.set(response.accessToken);
-      if (response.refreshToken) await tokenStorage.setRefresh(response.refreshToken);
-    }
-    return response;
-  },
-
-  sendMagicMail: async (email: string) =>
-    apiRequest<{ message: string; sent: boolean }>("/auth/send-verification-email", {
-      method: "POST", body: JSON.stringify({ email }),
-    }),
-
-  verifyMagicMail: async (token: string) => {
-    const response = await apiRequest<{
-      message: string; accessToken: string; refreshToken: string;
-      user: { id: number; email: string; role: string } | null; redirectTo: string;
-    }>("/auth/verify-magic-mail", { method: "POST", body: JSON.stringify({ token }) });
 
     if (response.accessToken) {
       await tokenStorage.set(response.accessToken);
@@ -385,11 +367,115 @@ export const usersApi = {
   },
 };
 
+export const favoritesApi = {
+  list: async () =>
+    apiRequest<{ providerIds: number[] }>("/favorites"),
+
+  check: async (providerId: number) =>
+    apiRequest<{ favorited: boolean }>(`/favorites/${providerId}`),
+
+  add: async (providerId: number) =>
+    apiRequest<{ favorited: true; providerId: number }>(`/favorites/${providerId}`, {
+      method: "POST",
+    }),
+
+  remove: async (providerId: number) =>
+    apiRequest<{ favorited: false; providerId: number }>(`/favorites/${providerId}`, {
+      method: "DELETE",
+    }),
+};
+
 export const ratingsApi = {
   getProviderAverage: async (providerId: number) =>
     apiRequest<{ averageRating?: number; totalRatings?: number }>(
       `/ratings/provider/${providerId}/average`
     ),
+
+  getByOrder: async (orderId: number) =>
+    apiRequest<{
+      id: number;
+      orderId: number;
+      providerId: number;
+      rating: number;
+      tags?: string[];
+      comment?: string;
+    } | null>(`/ratings/order/${orderId}`),
+
+  create: async (data: {
+    orderId: number;
+    providerId: number;
+    rating: number;
+    tags?: string[];
+    comment?: string;
+  }) =>
+    apiRequest("/ratings", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+};
+
+export type NotificationSettings = {
+  orderConfirmed: boolean;
+  orderReadyForPickup: boolean;
+  newOffersFromFavorites: boolean;
+  orderPending: boolean;
+  orderCancelled: boolean;
+  newOrder: boolean;
+  pushEnabled: boolean;
+  inAppEnabled: boolean;
+};
+
+export type AppNotification = {
+  id: number;
+  title: string;
+  message: string;
+  type: string;
+  read: boolean;
+  createdAt: string;
+  data?: Record<string, unknown>;
+};
+
+export const notificationsApi = {
+  list: async (page = 1, limit = 20) =>
+    apiRequest<{
+      notifications: AppNotification[];
+      total: number;
+      page: number;
+      totalPages: number;
+    }>(`/notifications?page=${page}&limit=${limit}`),
+
+  unreadCount: async () =>
+    apiRequest<{ count: number }>("/notifications/unread-count"),
+
+  markAsRead: async (id: number) =>
+    apiRequest(`/notifications/${id}/read`, { method: "PUT" }),
+
+  markAllAsRead: async () =>
+    apiRequest("/notifications/read-all", { method: "PUT" }),
+
+  getSettings: async () =>
+    apiRequest<NotificationSettings>("/notifications/settings"),
+
+  updateSettings: async (settings: Partial<NotificationSettings>) =>
+    apiRequest<NotificationSettings>("/notifications/settings", {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    }),
+
+  registerExpoPushToken: async (data: { token: string; platform?: string }) =>
+    apiRequest("/notifications/expo-push-token", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  unregisterExpoPushToken: async (token: string) =>
+    apiRequest("/notifications/expo-push-token", {
+      method: "DELETE",
+      body: JSON.stringify({ token }),
+    }),
+
+  testPush: async () =>
+    apiRequest("/notifications/test-push", { method: "POST" }),
 };
 
 export const contactApi = {
@@ -416,13 +502,16 @@ export const storageApi = {
     const formData = new FormData();
 
     for (let index = 0; index < files.length; index++) {
-      const { uri, fileName, mimeType } = normalizeUploadFile(files[index], index);
+      const normalized = normalizeUploadFile(files[index], index);
+      const uri = await ensureUploadableUri(normalized.uri, normalized.fileName);
+      const { fileName, mimeType } = normalized;
 
       if (Platform.OS === "web") {
         const blob = await fetch(uri).then((res) => res.blob());
         formData.append("files", new File([blob], fileName, { type: mimeType }));
       } else {
-        // React Native FormData accepts { uri, name, type }
+        // React Native FormData accepts { uri, name, type }.
+        // Android requires a readable file:// URI (not content://).
         formData.append("files", { uri, name: fileName, type: mimeType } as any);
       }
     }
@@ -504,7 +593,7 @@ export function transformOfferToProduct(offer: any): any {
       description: owner.location || "",
       address: owner.location || offer.mapsLink || "",
       category: offer.foodType || "Food",
-      rating: "4.5",
+      rating: null,
       imageUrl: ownerImage,
       logoUrl: owner.profileImage ? ownerImage : undefined,
       mapsLink: offer.mapsLink || owner.mapsLink,
@@ -519,11 +608,13 @@ export function transformOrder(order: any): any {
   if (!order) return null;
   const offer = order.offer || {};
   const product = transformOfferToProduct(offer);
+  const providerId = offer.ownerId || product.storeId || product.store?.id;
 
   return {
     id: order.id,
     userId: order.userId,
     productId: order.offerId,
+    providerId,
     quantity: order.quantity,
     status: order.status,
     pickupCode: order.qrCodeToken || order.id.toString(),
@@ -555,7 +646,7 @@ export function groupOffersByOwner(offers: any[]): any[] {
         description: owner.location || "",
         address: owner.location || offer.mapsLink || "",
         category: offer.foodType || "Food",
-        rating: "4.5",
+        rating: null,
         imageUrl: ownerImage,
         logoUrl: owner.profileImage ? ownerImage : undefined,
         mapsLink: offer.mapsLink || owner.mapsLink,

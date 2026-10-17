@@ -6,13 +6,15 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useOrders } from "@/hooks/use-shop";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ordersApi } from "@/lib/api-client";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ordersApi, ratingsApi } from "@/lib/api-client";
 import { Ionicons } from "@expo/vector-icons";
 import { formatPrice } from "@/utils/formatPrice";
 import Toast from "react-native-toast-message";
 import QRCode from "react-native-qrcode-svg";
 import { FALLBACK_IMAGE } from "@/lib/asset-uri";
+import { RatingModal } from "@/components/RatingModal";
+import { useLanguage } from "@/context/LanguageContext";
 
 // Enable LayoutAnimation on Android
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -165,15 +167,32 @@ function SectionHeader({ icon, iconBg, iconColor, title, count }: {
 function OrderCard({ order, onCancel, isCancelling }: {
   order: any; onCancel?: () => void; isCancelling?: boolean;
 }) {
+  const { t } = useLanguage();
   const [showDetails, setShowDetails] = useState(false);
   const [showQR, setShowQR] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [showRating, setShowRating] = useState(false);
 
   const cfg = getStatusConfig(order.status);
   const product = order.product || {};
   const store = product.store || {};
+  const providerId = order.providerId || store.id || product.storeId;
+  const canRate = order.status === "confirmed" && !!order.collectedAt && !!providerId;
   const orderDate = new Date(order.createdAt);
   const collectedDate = order.collectedAt ? new Date(order.collectedAt) : null;
+
+  const { data: existingRating, isLoading: ratingLoading } = useQuery({
+    queryKey: ["rating", order.id],
+    queryFn: async () => {
+      try {
+        return await ratingsApi.getByOrder(order.id);
+      } catch {
+        return null;
+      }
+    },
+    enabled: canRate,
+    retry: false,
+  });
 
   const toggleDetails = () => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -305,6 +324,22 @@ function OrderCard({ order, onCancel, isCancelling }: {
                 <Text style={s.cancelButtonText}>{isCancelling ? "Cancelling..." : "Cancel Order"}</Text>
               </TouchableOpacity>
             )}
+            {canRate && !ratingLoading && !existingRating && (
+              <TouchableOpacity style={s.rateButton} onPress={() => setShowRating(true)}>
+                <Ionicons name="star-outline" size={16} color="#fff" />
+                <Text style={s.rateButtonText}>
+                  {t("cart_order.rate_experience") || "Rate Experience"}
+                </Text>
+              </TouchableOpacity>
+            )}
+            {canRate && existingRating && (
+              <View style={s.ratedBadge}>
+                <Ionicons name="star" size={14} color="#f97316" />
+                <Text style={s.ratedText}>
+                  {t("cart_order.rated") || "Thank you for your rating!"} ({existingRating.rating}/5)
+                </Text>
+              </View>
+            )}
           </View>
 
           {/* QR Code */}
@@ -342,6 +377,16 @@ function OrderCard({ order, onCancel, isCancelling }: {
         <Ionicons name={showDetails ? "chevron-up" : "chevron-down"} size={16} color="#555" />
         <Text style={s.toggleButtonText}>{showDetails ? "Hide Details" : "Show Details"}</Text>
       </TouchableOpacity>
+
+      {canRate && providerId && (
+        <RatingModal
+          visible={showRating}
+          onClose={() => setShowRating(false)}
+          orderId={order.id}
+          providerId={providerId}
+          providerName={store.name}
+        />
+      )}
     </View>
   );
 }
@@ -397,6 +442,10 @@ const s = StyleSheet.create({
   cancelButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: "#ef4444", borderRadius: 12, paddingVertical: 14 },
   cancelButtonDisabled: { opacity: 0.5 },
   cancelButtonText: { color: "#fff", fontWeight: "600", fontSize: 14 },
+  rateButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: "#f97316", borderRadius: 12, paddingVertical: 14 },
+  rateButtonText: { color: "#fff", fontWeight: "600", fontSize: 14 },
+  ratedBadge: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: "#fff7ed", borderRadius: 12, paddingVertical: 12, borderWidth: 1, borderColor: "#fed7aa" },
+  ratedText: { color: "#9a3412", fontWeight: "600", fontSize: 13 },
 
   qrContainer: { backgroundColor: "#fff", borderRadius: 12, padding: 16, borderWidth: 1, borderColor: "#e0e0e0", alignItems: "center", gap: 8, marginTop: 4 },
   qrTitle: { fontSize: 16, fontWeight: "700", color: "#111" },
