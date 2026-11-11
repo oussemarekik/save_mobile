@@ -16,7 +16,7 @@
         "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID": "997063419161-7h5dmmlljrniqqki48ju54eq31bud2p3.apps.googleusercontent.com",
         "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "997063419161-6pg7v8ueuv4u5ar3tkrb76um6r4e5376.apps.googleusercontent.com",
         "EXPO_PUBLIC_FACEBOOK_APP_ID": "2359090251275497",
-        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": ""
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyC_Rl-groJBcAAOmo6Wl6vQy5tIUyB0RZE"
       }
     },
     "preview": {
@@ -33,7 +33,7 @@
         "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID": "997063419161-7h5dmmlljrniqqki48ju54eq31bud2p3.apps.googleusercontent.com",
         "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "997063419161-6pg7v8ueuv4u5ar3tkrb76um6r4e5376.apps.googleusercontent.com",
         "EXPO_PUBLIC_FACEBOOK_APP_ID": "2359090251275497",
-        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": ""
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyC_Rl-groJBcAAOmo6Wl6vQy5tIUyB0RZE"
       }
     },
     "production": {
@@ -44,7 +44,7 @@
         "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID": "997063419161-7h5dmmlljrniqqki48ju54eq31bud2p3.apps.googleusercontent.com",
         "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "997063419161-6pg7v8ueuv4u5ar3tkrb76um6r4e5376.apps.googleusercontent.com",
         "EXPO_PUBLIC_FACEBOOK_APP_ID": "2359090251275497",
-        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": ""
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyC_Rl-groJBcAAOmo6Wl6vQy5tIUyB0RZE"
       }
     }
   },
