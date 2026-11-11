@@ -17,6 +17,7 @@
       "buildNumber": "2",
       "supportsTablet": true,
       "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "Save The Plate needs camera access to scan pickup QR codes.",
         "NSPhotoLibraryUsageDescription": "Save The Plate needs photo library access to upload food offer images.",
         "NSLocationWhenInUseUsageDescription": "Save The Plate uses your location to show nearby food offers.",
