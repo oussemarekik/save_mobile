@@ -1,16 +1,18 @@
-import React, { useState } from "react";
-import { View, ActivityIndicator } from "react-native";
-import { Tabs, Redirect } from "expo-router";
+import React from "react";
+import { View, ActivityIndicator, Platform } from "react-native";
+import { Tabs, Redirect, useRouter } from "expo-router";
 import { useAuth } from "@/hooks/use-auth";
 import { useLanguage } from "@/context/LanguageContext";
 import { Ionicons } from "@expo/vector-icons";
 import { theme } from "@/lib/theme";
-import { OfferTypeModal } from "@/components/OfferTypeModal";
+import { useSystemBottomInset } from "@/lib/screen-insets";
 
 export default function ProviderLayout() {
   const { isAuthenticated, user, isLoading } = useAuth();
   const { t } = useLanguage();
-  const [showOfferModal, setShowOfferModal] = useState(false);
+  const router = useRouter();
+  const systemBottom = useSystemBottomInset();
+  const tabBarPaddingBottom = Platform.OS === "android" ? systemBottom : Math.max(systemBottom, 0);
 
   if (isLoading) {
     return (
@@ -32,7 +34,12 @@ export default function ProviderLayout() {
           headerShown: false,
           tabBarActiveTintColor: theme.primary,
           tabBarInactiveTintColor: theme.muted,
-          tabBarStyle: { borderTopColor: theme.border, backgroundColor: "#fff" },
+          tabBarStyle: {
+            borderTopColor: theme.border,
+            backgroundColor: "#fff",
+            paddingBottom: tabBarPaddingBottom,
+            height: 56 + tabBarPaddingBottom,
+          },
         }}
       >
         <Tabs.Screen
@@ -51,7 +58,7 @@ export default function ProviderLayout() {
           listeners={{
             tabPress: (e) => {
               e.preventDefault();
-              setShowOfferModal(true);
+              router.push("/new-offer" as any);
             },
           }}
         />
@@ -69,12 +76,7 @@ export default function ProviderLayout() {
             tabBarIcon: ({ color }) => <Ionicons name="person-outline" size={22} color={color} />,
           }}
         />
-        <Tabs.Screen name="offers" options={{ href: null }} />
-        <Tabs.Screen name="add-offer" options={{ href: null }} />
-        <Tabs.Screen name="rapid-offer" options={{ href: null }} />
-        <Tabs.Screen name="create-magic-box" options={{ href: null }} />
       </Tabs>
-      <OfferTypeModal visible={showOfferModal} onClose={() => setShowOfferModal(false)} />
     </View>
   );
 }

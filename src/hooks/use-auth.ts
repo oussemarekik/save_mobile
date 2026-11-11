@@ -1,7 +1,12 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { authApi, tokenStorage } from "@/lib/api-client";
-import { clearAuthSession } from "@/lib/auth-session";
+import {
+  clearAuthSession,
+  invalidateAuthSession,
+  onSessionInvalidated,
+} from "@/lib/auth-session";
+import { ApiError } from "@/utils/errorUtils";
 import {
   syncPushRegistrationIfEnabled,
   unregisterPushNotifications,
@@ -12,10 +17,13 @@ export type AuthenticatedUser = {
   email: string;
   username: string;
   role: string;
+  emailVerified?: boolean;
   profileImage?: string;
   location?: string;
   phoneNumber?: string;
   mapsLink?: string;
+  latitude?: number | null;
+  longitude?: number | null;
 };
 
 let hasTokenCache: boolean | null = null;
@@ -30,7 +38,7 @@ function getTokenSnapshot(): boolean | null {
   return hasTokenCache;
 }
 
-function setHasTokenShared(value: boolean | null) {
+export function setHasTokenShared(value: boolean | null) {
   hasTokenCache = value;
   tokenListeners.forEach((listener) => listener());
 }
@@ -43,22 +51,42 @@ async function readTokenFromStorage(): Promise<boolean> {
 }
 
 async function fetchUser(): Promise<AuthenticatedUser | null> {
+  const tokenAtStart = await tokenStorage.get();
   try {
     const user = await authApi.getUserByToken();
+    const tokenNow = await tokenStorage.get();
+    if (tokenAtStart && tokenNow && tokenNow !== tokenAtStart) {
+      throw new Error("Session changed");
+    }
     return {
       id: user.id,
       email: user.email,
       username: user.username,
       role: user.role,
+      emailVerified: user.emailVerified,
       profileImage: user.profileImage,
       location: user.location,
       phoneNumber: user.phoneNumber,
       mapsLink: user.mapsLink,
+      latitude: (user as { latitude?: number | null }).latitude ?? null,
+      longitude: (user as { longitude?: number | null }).longitude ?? null,
     };
-  } catch {
-    await clearAuthSession();
-    setHasTokenShared(false);
-    return null;
+  } catch (error) {
+    const tokenNow = await tokenStorage.get();
+    if (tokenAtStart && tokenNow && tokenNow !== tokenAtStart) {
+      throw error;
+    }
+    // 401/403: bad session. 404: token points at a user that no longer exists.
+    // Keep tokens on network/5xx so a blip does not look like a failed login.
+    const status = error instanceof ApiError ? error.status : 0;
+    if (status === 401 || status === 403 || status === 404) {
+      if (tokenNow) {
+        await clearAuthSession();
+      }
+      setHasTokenShared(false);
+      return null;
+    }
+    throw error;
   }
 }
 
@@ -74,6 +102,14 @@ export function useAuth() {
   useEffect(() => {
     readTokenFromStorage();
   }, []);
+
+  // Keep React auth state in sync when api-client invalidates on 401.
+  useEffect(() => {
+    return onSessionInvalidated(() => {
+      setHasTokenShared(false);
+      queryClient.setQueryData(["/auth/get-user-by-token"], null);
+    });
+  }, [queryClient]);
 
   const { data: user, isLoading: isUserLoading } = useQuery<AuthenticatedUser | null>({
     queryKey: ["/auth/get-user-by-token"],
@@ -109,6 +145,7 @@ export function useAuth() {
       queryClient.setQueryData(["/auth/get-user-by-token"], null);
       return null;
     }
+    await queryClient.cancelQueries({ queryKey: ["/auth/get-user-by-token"] });
     const nextUser = await queryClient.fetchQuery({
       queryKey: ["/auth/get-user-by-token"],
       queryFn: fetchUser,
@@ -127,5 +164,8 @@ export function useAuth() {
     logoutAsync: logoutMutation.mutateAsync,
     isLoggingOut: logoutMutation.isPending,
     refreshAuth,
+    /** Call after writing tokens so UI auth state updates immediately. */
+    markAuthenticated: () => setHasTokenShared(true),
+    invalidateSession: invalidateAuthSession,
   };
 }

@@ -5,13 +5,13 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
-  Platform,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { WebView } from "react-native-webview";
 import { Ionicons } from "@expo/vector-icons";
 import { LEGAL_PAGES } from "@/lib/constants";
 import { safeGoBack } from "@/lib/navigation";
+import { useHeaderTopPadding } from "@/lib/screen-insets";
 
 const PAGE_TITLES: Record<string, string> = {
   privacy: "Privacy Policy",
@@ -23,6 +23,7 @@ const PAGE_TITLES: Record<string, string> = {
 export default function LegalPage() {
   const { page } = useLocalSearchParams<{ page: string }>();
   const router = useRouter();
+  const headerTop = useHeaderTopPadding();
   const url = LEGAL_PAGES[page as keyof typeof LEGAL_PAGES];
   const title = PAGE_TITLES[page] ?? "Legal";
 
@@ -39,7 +40,7 @@ export default function LegalPage() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: headerTop }]}>
         <TouchableOpacity style={styles.backButton} onPress={() => safeGoBack(router, "/")}>
           <Ionicons name="arrow-back" size={22} color="#111" />
         </TouchableOpacity>
@@ -65,7 +66,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 12,
     paddingHorizontal: 16,
-    paddingTop: Platform.OS === "ios" ? 56 : 16,
     paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: "#e5e5e5",

@@ -12,8 +12,11 @@ import { Ionicons } from "@expo/vector-icons";
 export default function ImpactScreen() {
   const router = useRouter();
   const { t } = useLanguage();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const { data: orders } = useOrders();
+  const isProvider =
+    user?.role === "PROVIDER" || user?.role === "PENDING_PROVIDER";
+  const profileHref = isProvider ? "/(provider)/profile" : "/(client)/profile";
 
   const mealsSaved = isAuthenticated
     ? (orders?.filter((o: any) => o.status === "confirmed" && o.collectedAt) || []).length
@@ -61,7 +64,7 @@ export default function ImpactScreen() {
       <ScreenHeader
         title={t("impact.title")}
         subtitle={t("impact.description")}
-        onBack={() => router.push("/(client)/profile")}
+        onBack={() => router.push(profileHref as any)}
       />
       <ScrollView contentContainerStyle={styles.content}>
         {isAuthenticated && (
@@ -99,7 +102,7 @@ export default function ImpactScreen() {
 
         <TouchableOpacity
           style={styles.cta}
-          onPress={() => router.push("/(client)/Browse")}
+          onPress={() => router.push("/search" as any)}
           activeOpacity={0.85}
         >
           <Ionicons name="bag-outline" size={18} color="#fff" />

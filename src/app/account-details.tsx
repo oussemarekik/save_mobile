@@ -10,7 +10,6 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
-  Image,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useQueryClient } from "@tanstack/react-query";
@@ -19,15 +18,18 @@ import { useAuth } from "@/hooks/use-auth";
 import { useLanguage } from "@/context/LanguageContext";
 import { LocationAutocomplete, generateMapsLink, type SelectedPlace } from "@/components/LocationAutocomplete";
 import { pickImageFromLibrary, type PickedImage } from "@/lib/pick-image";
+import { ProfileImage } from "@/components/ProfileImage";
+import { ScreenHeader } from "@/components/ScreenHeader";
 import { safeGoBack } from "@/lib/navigation";
 import Toast from "react-native-toast-message";
 import { Ionicons } from "@expo/vector-icons";
-
-const PRIMARY = "#16a34a";
+import { theme } from "@/lib/theme";
+import { useScreenBottomPadding } from "@/lib/screen-insets";
 
 export default function AccountDetails() {
   const router = useRouter();
   const { t } = useLanguage();
+  const bottomPad = useScreenBottomPadding();
   const { user, logoutAsync, isAuthenticated, refreshAuth } = useAuth();
   const queryClient = useQueryClient();
   const [isLoading, setIsLoading] = useState(false);
@@ -44,6 +46,11 @@ export default function AccountDetails() {
     longitude: null as number | null,
   });
 
+  const backFallback =
+    user?.role === "PROVIDER" || user?.role === "PENDING_PROVIDER"
+      ? "/(provider)/profile"
+      : "/(client)/profile";
+
   useEffect(() => {
     if (!user) return;
     setForm({
@@ -58,33 +65,22 @@ export default function AccountDetails() {
     setPickedImage(null);
   }, [user]);
 
-  const syncFromMapsLink = async (mapsLink: string) => {
-    const trimmed = mapsLink.trim();
-    if (!trimmed) return;
-    try {
-      const data = await usersApi.extractLocation(trimmed);
-      if (data?.locationName) {
-        setForm((f) => ({
-          ...f,
-          mapsLink,
-          username: data.locationName!,
-          location: data.locationName!,
-          latitude: data.latitude ?? f.latitude,
-          longitude: data.longitude ?? f.longitude,
-        }));
-      }
-    } catch {
-      // Non-blocking: user can still edit fields manually
-    }
-  };
-
   if (!isAuthenticated || !user) {
     return (
-      <View style={styles.centered}>
-        <Text style={styles.title}>{t("auth.signInRequired")}</Text>
-        <TouchableOpacity style={styles.primaryButton} onPress={() => router.push("/(auth)/signin")}>
-          <Text style={styles.primaryButtonText}>{t("common.signIn")}</Text>
-        </TouchableOpacity>
+      <View style={styles.screen}>
+        <ScreenHeader title={t("account_details.title")} onBack={() => safeGoBack(router, "/")} />
+        <View style={styles.centered}>
+          <View style={styles.emptyIcon}>
+            <Ionicons name="person-outline" size={28} color={theme.primaryDark} />
+          </View>
+          <Text style={styles.emptyTitle}>{t("auth.signInRequired")}</Text>
+          <TouchableOpacity
+            style={styles.primaryButton}
+            onPress={() => router.push("/(auth)/signin")}
+          >
+            <Text style={styles.primaryButtonText}>{t("common.signIn")}</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     );
   }
@@ -154,12 +150,7 @@ export default function AccountDetails() {
         text1: t("account_details.profile_updated"),
         text2: t("account_details.profile_updated_desc"),
       });
-      safeGoBack(
-        router,
-        user.role === "PROVIDER" || user.role === "PENDING_PROVIDER"
-          ? "/(provider)/profile"
-          : "/(client)/profile"
-      );
+      safeGoBack(router, backFallback);
     } catch (error: any) {
       Toast.show({
         type: "error",
@@ -191,7 +182,7 @@ export default function AccountDetails() {
                 text1: t("account_details.account_deleted"),
                 text2: t("account_details.account_deleted_desc"),
               });
-              router.replace("/(auth)/signin");
+              router.replace("/(auth)/welcome");
             } catch (error: any) {
               Toast.show({
                 type: "error",
@@ -222,57 +213,76 @@ export default function AccountDetails() {
     if (picked) setPickedImage(picked);
   };
 
+  const handleAddressChange = (locationName: string, place?: SelectedPlace) => {
+    setForm((f) => {
+      const address = place?.formattedAddress?.trim() || locationName.trim();
+      const lat = place?.latitude ?? null;
+      const lng = place?.longitude ?? null;
+      const mapsLink = address
+        ? generateMapsLink(address, f.username, lat, lng, place?.placeId)
+        : "";
+      return {
+        ...f,
+        location: address,
+        latitude: address ? lat : null,
+        longitude: address ? lng : null,
+        mapsLink,
+      };
+    });
+  };
+
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={styles.screen}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() =>
-            safeGoBack(
-              router,
-              user.role === "PROVIDER" || user.role === "PENDING_PROVIDER"
-                ? "/(provider)/profile"
-                : "/(client)/profile"
-            )
-          }
-        >
-          <Ionicons name="arrow-back" size={22} color="#111" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>{t("account_details.title")}</Text>
-      </View>
+      <ScreenHeader
+        title={t("account_details.title")}
+        onBack={() => safeGoBack(router, backFallback)}
+      />
 
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <View style={styles.field}>
-          <Text style={styles.label}>
-            {t("account_details.profile_image") || t("provider.profile.edit_dialog.profile_image")}
-          </Text>
-          {isBusiness ? (
-            <Text style={styles.hint}>
-              {t("account_details.profile_image_hint") ||
-                t("provider.profile.edit_dialog.upload_logo")}
-            </Text>
-          ) : null}
+      <ScrollView
+        contentContainerStyle={[styles.content, { paddingBottom: bottomPad }]}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.card}>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionIcon}>
+              <Ionicons name="camera-outline" size={18} color={theme.primaryDark} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.sectionTitle}>
+                {t("account_details.profile_image") ||
+                  t("provider.profile.edit_dialog.profile_image")}
+              </Text>
+              {isBusiness ? (
+                <Text style={styles.sectionDesc}>
+                  {t("account_details.profile_image_hint") ||
+                    t("provider.profile.edit_dialog.upload_logo")}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+
           <View style={styles.photoRow}>
             <View style={styles.avatar}>
-              {previewUri ? (
-                <Image source={{ uri: previewUri }} style={styles.avatarImage} />
-              ) : (
-                <Text style={styles.avatarInitials}>{initials}</Text>
-              )}
+              <ProfileImage
+                uri={previewUri}
+                style={styles.avatarImage}
+                fallback={<Text style={styles.avatarInitials}>{initials}</Text>}
+              />
             </View>
             <TouchableOpacity
               style={styles.photoButton}
               onPress={handlePickProfileImage}
               disabled={isLoading || uploadingImage}
+              activeOpacity={0.85}
             >
               {uploadingImage ? (
-                <ActivityIndicator color={PRIMARY} />
+                <ActivityIndicator color={theme.primaryDark} />
               ) : (
                 <>
-                  <Ionicons name="camera-outline" size={18} color={PRIMARY} />
+                  <Ionicons name="image-outline" size={18} color={theme.primaryDark} />
                   <Text style={styles.photoButtonText}>
                     {previewUri
                       ? t("account_details.change_photo")
@@ -283,61 +293,64 @@ export default function AccountDetails() {
             </TouchableOpacity>
           </View>
         </View>
-        <Field label={t("account_details.email")} value={user.email} editable={false} />
-        <Field
-          label={t("account_details.display_name")}
-          value={form.username}
-          onChangeText={(username) => setForm((f) => ({ ...f, username }))}
-          placeholder={t("account_details.display_name_placeholder")}
-        />
-        <View style={styles.field}>
-          <Text style={styles.label}>{t("account_details.location")}</Text>
-          <LocationAutocomplete
-            value={form.location}
-            onChange={(locationName, place?: SelectedPlace) => {
-              setForm((f) => {
-                const lat = place?.latitude ?? null;
-                const lng = place?.longitude ?? null;
-                const mapsLink = locationName.trim()
-                  ? generateMapsLink(locationName.trim(), f.username, lat, lng, place?.placeId)
-                  : f.mapsLink;
-                return {
-                  ...f,
-                  location: locationName,
-                  latitude: lat,
-                  longitude: lng,
-                  mapsLink,
-                };
-              });
-            }}
-            placeholder={
-              t("business_signup.location_search_placeholder") ||
-              t("account_details.location_placeholder")
-            }
+
+        <View style={styles.card}>
+          <View style={styles.sectionHeader}>
+            <View style={[styles.sectionIcon, { backgroundColor: theme.blueBg }]}>
+              <Ionicons name="person-outline" size={18} color={theme.infoDark} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.sectionTitle}>{t("profile.account") || "Account"}</Text>
+              <Text style={styles.sectionDesc}>
+                {t("account_details.profile_updated_desc") ||
+                  "Update your personal information"}
+              </Text>
+            </View>
+          </View>
+
+          <Field label={t("account_details.email")} value={user.email} editable={false} />
+          <Field
+            label={t("account_details.display_name")}
+            value={form.username}
+            onChangeText={(username) => setForm((f) => ({ ...f, username }))}
+            placeholder={t("account_details.display_name_placeholder")}
+          />
+
+          <View style={styles.field}>
+            <Text style={styles.label}>{t("account_details.address") || "Address"}</Text>
+            {!isBusiness ? (
+              <Text style={styles.hint}>
+                {t("account_details.address_hint") ||
+                  "Use your current location, or search and select an exact place."}
+              </Text>
+            ) : null}
+            <LocationAutocomplete
+              value={form.location}
+              exactPlaceOnly
+              enableCurrentLocation={!isBusiness}
+              onChange={handleAddressChange}
+              placeholder={
+                t("account_details.address_placeholder") ||
+                t("business_signup.location_search_placeholder") ||
+                "Search for your address..."
+              }
+            />
+          </View>
+
+          <Field
+            label={t("account_details.phone_number")}
+            value={form.phoneNumber}
+            onChangeText={(phoneNumber) => setForm((f) => ({ ...f, phoneNumber }))}
+            placeholder={t("account_details.phone_placeholder")}
+            keyboardType="phone-pad"
           />
         </View>
-        <Field
-          label={t("account_details.phone_number")}
-          value={form.phoneNumber}
-          onChangeText={(phoneNumber) => setForm((f) => ({ ...f, phoneNumber }))}
-          placeholder={t("account_details.phone_placeholder")}
-          keyboardType="phone-pad"
-        />
-        <Field
-          label={t("account_details.maps_link")}
-          value={form.mapsLink}
-          onChangeText={(mapsLink) => {
-            setForm((f) => ({ ...f, mapsLink }));
-            syncFromMapsLink(mapsLink);
-          }}
-          placeholder={t("account_details.maps_placeholder")}
-          autoCapitalize="none"
-        />
 
         <TouchableOpacity
           style={[styles.primaryButton, isLoading && styles.disabled]}
           onPress={handleSave}
           disabled={isLoading}
+          activeOpacity={0.85}
         >
           {isLoading ? (
             <ActivityIndicator color="#fff" />
@@ -346,14 +359,25 @@ export default function AccountDetails() {
           )}
         </TouchableOpacity>
 
-        <View style={styles.dangerZone}>
-          <Text style={styles.dangerTitle}>{t("account_details.danger_zone")}</Text>
-          <Text style={styles.dangerText}>{t("account_details.danger_desc")}</Text>
+        <View style={styles.dangerCard}>
+          <View style={styles.sectionHeader}>
+            <View style={[styles.sectionIcon, { backgroundColor: theme.destructiveBg }]}>
+              <Ionicons name="warning-outline" size={18} color={theme.destructive} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.sectionTitle, { color: theme.destructive }]}>
+                {t("account_details.danger_zone")}
+              </Text>
+              <Text style={styles.dangerText}>{t("account_details.danger_desc")}</Text>
+            </View>
+          </View>
           <TouchableOpacity
             style={[styles.deleteButton, isDeleting && styles.disabled]}
             onPress={handleDeleteAccount}
             disabled={isDeleting}
+            activeOpacity={0.85}
           >
+            <Ionicons name="trash-outline" size={16} color={theme.destructive} />
             <Text style={styles.deleteButtonText}>
               {isDeleting ? t("account_details.deleting") : t("account_details.delete_account")}
             </Text>
@@ -389,7 +413,7 @@ function Field({
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor="#999"
+        placeholderTextColor={theme.mutedForeground}
         editable={editable}
         keyboardType={keyboardType}
         autoCapitalize={autoCapitalize}
@@ -399,27 +423,14 @@ function Field({
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingTop: Platform.OS === "ios" ? 56 : 16,
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: "#e5e5e5",
+  screen: {
+    flex: 1,
+    backgroundColor: theme.backgroundGradient,
   },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#f5f5f5",
-    alignItems: "center",
-    justifyContent: "center",
+  content: {
+    padding: 16,
+    gap: 16,
   },
-  headerTitle: { fontSize: 20, fontWeight: "800", color: "#111" },
-  content: { padding: 20, gap: 16, paddingBottom: 40 },
   centered: {
     flex: 1,
     alignItems: "center",
@@ -427,75 +438,162 @@ const styles = StyleSheet.create({
     padding: 24,
     gap: 12,
   },
-  title: { fontSize: 20, fontWeight: "700" },
-  field: { gap: 8 },
-  hint: { fontSize: 12, color: "#888", marginTop: -4 },
-  photoRow: { flexDirection: "row", alignItems: "center", gap: 16 },
+  emptyIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: theme.primaryBg,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 4,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: theme.foreground,
+  },
+  card: {
+    backgroundColor: theme.card,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: theme.border,
+    gap: 14,
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  sectionIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: theme.primaryBg,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sectionTitle: {
+    fontWeight: "700",
+    fontSize: 16,
+    color: theme.foreground,
+  },
+  sectionDesc: {
+    fontSize: 13,
+    color: theme.muted,
+    marginTop: 2,
+    lineHeight: 18,
+  },
+  field: {
+    gap: 8,
+  },
+  hint: {
+    fontSize: 12,
+    color: theme.muted,
+    lineHeight: 16,
+    marginTop: -2,
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: theme.foreground,
+  },
+  input: {
+    backgroundColor: theme.backgroundGradient,
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 15,
+    color: theme.foreground,
+  },
+  inputDisabled: {
+    color: theme.muted,
+    backgroundColor: "#F3F4F6",
+  },
+  photoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 16,
+  },
   avatar: {
     width: 88,
     height: 88,
     borderRadius: 44,
-    backgroundColor: "#ecfdf5",
+    backgroundColor: theme.primaryBg,
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: "#d1fae5",
+    borderColor: theme.primaryBorder,
   },
   avatarImage: { width: "100%", height: "100%" },
-  avatarInitials: { fontSize: 28, fontWeight: "800", color: PRIMARY },
+  avatarInitials: {
+    fontSize: 28,
+    fontWeight: "800",
+    color: theme.primaryDark,
+  },
   photoButton: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
-    backgroundColor: "#ecfdf5",
+    backgroundColor: theme.primaryBg,
     borderWidth: 1,
-    borderColor: "#a7f3d0",
+    borderColor: theme.primaryBorder,
     borderRadius: 12,
     paddingVertical: 14,
     paddingHorizontal: 12,
   },
-  photoButtonText: { color: PRIMARY, fontWeight: "700", fontSize: 14 },
-  label: { fontSize: 14, fontWeight: "600", color: "#333" },
-  input: {
-    backgroundColor: "#f5f5f5",
-    borderWidth: 1,
-    borderColor: "#e5e5e5",
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 15,
-    color: "#111",
+  photoButtonText: {
+    color: theme.primaryDark,
+    fontWeight: "700",
+    fontSize: 14,
   },
-  inputDisabled: { color: "#888", backgroundColor: "#fafafa" },
   primaryButton: {
-    backgroundColor: PRIMARY,
-    borderRadius: 12,
-    paddingVertical: 14,
+    backgroundColor: theme.primaryDark,
+    borderRadius: 14,
+    paddingVertical: 15,
     alignItems: "center",
-    marginTop: 8,
+    justifyContent: "center",
   },
-  primaryButtonText: { color: "#fff", fontWeight: "700", fontSize: 16 },
+  primaryButtonText: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 16,
+  },
   disabled: { opacity: 0.6 },
-  dangerZone: {
-    marginTop: 24,
+  dangerCard: {
+    backgroundColor: theme.destructiveBg,
+    borderRadius: 16,
     padding: 16,
-    borderRadius: 12,
     borderWidth: 1,
     borderColor: "#fecaca",
-    backgroundColor: "#fef2f2",
-    gap: 8,
+    gap: 14,
   },
-  dangerTitle: { fontSize: 16, fontWeight: "700", color: "#991b1b" },
-  dangerText: { fontSize: 13, color: "#b91c1c", lineHeight: 18 },
+  dangerText: {
+    fontSize: 13,
+    color: theme.destructive,
+    lineHeight: 18,
+    marginTop: 2,
+    opacity: 0.9,
+  },
   deleteButton: {
-    marginTop: 8,
-    paddingVertical: 12,
-    borderRadius: 10,
-    backgroundColor: "#ef4444",
+    flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 13,
+    borderRadius: 12,
+    backgroundColor: theme.card,
+    borderWidth: 1,
+    borderColor: "#fecaca",
   },
-  deleteButtonText: { color: "#fff", fontWeight: "700" },
+  deleteButtonText: {
+    color: theme.destructive,
+    fontWeight: "700",
+    fontSize: 14,
+  },
 });

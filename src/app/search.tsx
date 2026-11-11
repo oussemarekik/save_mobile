@@ -4,10 +4,11 @@ import {
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useLanguage } from "@/context/LanguageContext";
-import { usersApi, offersApi, transformOfferToProduct, buildImageUrl } from "@/lib/api-client";
+import { usersApi, offersApi, transformOfferToProduct } from "@/lib/api-client";
 import { isOfferExpired } from "@/utils/offerUtils";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { BagCard } from "@/components/BagCard";
+import { ProfileImage } from "@/components/ProfileImage";
 import { theme } from "@/lib/theme";
 import { Ionicons } from "@expo/vector-icons";
 
@@ -21,15 +22,18 @@ export default function SearchScreen() {
   const [businessResults, setBusinessResults] = useState<any[]>([]);
   const [offerResults, setOfferResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const performSearch = useCallback(async (query: string) => {
     const trimmed = query.trim();
     if (!trimmed) {
       setBusinessResults([]);
       setOfferResults([]);
+      setError(null);
       return;
     }
     setLoading(true);
+    setError(null);
     try {
       const [businesses, offers] = await Promise.all([
         usersApi.search(trimmed),
@@ -48,10 +52,11 @@ export default function SearchScreen() {
     } catch {
       setBusinessResults([]);
       setOfferResults([]);
+      setError(t("search.error") || t("offers.error_fetch") || "Unable to load search results. Please try again.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     const timer = setTimeout(() => performSearch(searchQuery), 500);
@@ -83,21 +88,30 @@ export default function SearchScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         {loading && <ActivityIndicator color={theme.primary} style={{ marginVertical: 24 }} />}
 
-        {businessResults.length > 0 && (
+        {!loading && error && (
+          <View style={styles.errorBox}>
+            <Ionicons name="alert-circle-outline" size={28} color="#ef4444" />
+            <Text style={styles.errorText}>{error}</Text>
+            <TouchableOpacity style={styles.retryButton} onPress={() => performSearch(searchQuery)}>
+              <Text style={styles.retryButtonText}>{t("common.try_again") || "Try Again"}</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {!error && businessResults.length > 0 && (
           <>
             <Text style={styles.sectionTitle}>{t("search.businesses") || "Businesses"}</Text>
             {businessResults.map((b) => {
-              const avatarUri = buildImageUrl(b.profileImage);
               return (
                 <TouchableOpacity
                   key={b.id}
                   style={styles.businessCard}
                   onPress={() => router.push(`/business/${b.id}` as any)}
                 >
-                  <Image
-                    source={avatarUri ? { uri: avatarUri } : DEFAULT_PROFILE_IMAGE}
+                  <ProfileImage
+                    uri={b.profileImage}
                     style={styles.businessAvatar}
-                    defaultSource={DEFAULT_PROFILE_IMAGE}
+                    fallback={<Image source={DEFAULT_PROFILE_IMAGE} style={styles.businessAvatar} />}
                   />
                   <View style={{ flex: 1 }}>
                     <Text style={styles.businessName}>{b.username}</Text>
@@ -110,7 +124,7 @@ export default function SearchScreen() {
           </>
         )}
 
-        {offerResults.length > 0 && (
+        {!error && offerResults.length > 0 && (
           <>
             <Text style={styles.sectionTitle}>{t("search.offers") || "Offers"}</Text>
             {offerResults.map((product) => (
@@ -119,7 +133,7 @@ export default function SearchScreen() {
           </>
         )}
 
-        {!loading && searchQuery.trim() && businessResults.length === 0 && offerResults.length === 0 && (
+        {!loading && !error && searchQuery.trim() && businessResults.length === 0 && offerResults.length === 0 && (
           <Text style={styles.empty}>{t("search.noResults") || "No results found"}</Text>
         )}
       </ScrollView>
@@ -159,4 +173,14 @@ const styles = StyleSheet.create({
   businessName: { fontWeight: "700", fontSize: 15, color: theme.foreground },
   businessLoc: { fontSize: 12, color: theme.muted, marginTop: 2 },
   empty: { textAlign: "center", color: theme.muted, marginTop: 40 },
+  errorBox: { alignItems: "center", gap: 10, marginTop: 32, paddingHorizontal: 16 },
+  errorText: { textAlign: "center", color: theme.foreground, fontSize: 14, fontWeight: "500" },
+  retryButton: {
+    marginTop: 4,
+    backgroundColor: theme.primary,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+  },
+  retryButtonText: { color: "#fff", fontWeight: "700", fontSize: 14 },
 });

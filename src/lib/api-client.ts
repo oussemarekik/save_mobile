@@ -2,52 +2,37 @@
  * API Client for NestJS Backend - React Native version
  */
 
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { File as ExpoFile, UploadType } from "expo-file-system";
 import { Platform } from "react-native";
 import { googlePlaceDetails, googlePlacesAutocomplete } from "@/lib/google-places";
 import { ApiError, extractMessageFromApiBody } from "@/utils/errorUtils";
 import { ensureUploadableUri, normalizeUploadFile } from "@/lib/upload-file";
 import { FALLBACK_IMAGE } from "@/lib/asset-uri";
+import { invalidateAuthSession } from "@/lib/auth-session";
+import { API_BASE_URL, resolveStorageAssetUrl } from "@/lib/api-base-url";
+import { tokenStorage } from "@/lib/token-storage";
 
-export { FALLBACK_IMAGE };
+export { FALLBACK_IMAGE, tokenStorage, API_BASE_URL };
 
-const DEFAULT_API_BASE_URL =
-  Platform.select({
-    web: "https://savetheplate.tn/api",
-    ios: "https://savetheplate.tn/api",
-    android: "https://savetheplate.tn/api",
-    default: "https://savetheplate.tn/api",
-  }) || "https://savetheplate.tn/api";
+function isCredentialEndpoint(endpoint: string): boolean {
+  return (
+    endpoint.includes("/auth/signin") ||
+    endpoint.includes("/auth/signup") ||
+    endpoint.includes("/auth/google") ||
+    endpoint.includes("/auth/facebook") ||
+    endpoint.includes("/auth/forgot-password") ||
+    endpoint.includes("/auth/reset-password")
+  );
+}
 
-const API_BASE_URL = (process.env.EXPO_PUBLIC_API_URL || DEFAULT_API_BASE_URL).replace(/\/$/, "");
-
-// ─── Token Storage (AsyncStorage) ─────────────────────────────────────────────
-const isSSR = typeof window === "undefined";
-
-export const tokenStorage = {
-  get: (): Promise<string | null> => {
-    if (isSSR) return Promise.resolve(null);
-    return AsyncStorage.getItem("accessToken");
-  },
-  set: (token: string): Promise<void> => {
-    if (isSSR) return Promise.resolve();
-    return AsyncStorage.setItem("accessToken", token);
-  },
-  remove: async (): Promise<void> => {
-    if (isSSR) return;
-    await AsyncStorage.removeItem("accessToken");
-    await AsyncStorage.removeItem("refreshToken");
-    await AsyncStorage.removeItem("auth-intent-role");
-  },
-  getRefresh: (): Promise<string | null> => {
-    if (isSSR) return Promise.resolve(null);
-    return AsyncStorage.getItem("refreshToken");
-  },
-  setRefresh: (token: string): Promise<void> => {
-    if (isSSR) return Promise.resolve();
-    return AsyncStorage.setItem("refreshToken", token);
-  },
-};
+/** A 401 from a replaced token must not wipe the session that just logged in. */
+async function invalidateIfTokenCurrent(tokenUsed: string | null, endpoint: string) {
+  if (!tokenUsed || isCredentialEndpoint(endpoint)) return;
+  const current = await tokenStorage.get();
+  if (current === tokenUsed) {
+    await invalidateAuthSession();
+  }
+}
 
 // ─── API Request ───────────────────────────────────────────────────────────────
 async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -70,10 +55,6 @@ async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promi
   const response = await fetch(url, { ...options, headers });
 
   if (!response.ok) {
-    if (response.status === 401) {
-      await tokenStorage.remove();
-    }
-
     let body: unknown = null;
     let rawText = "";
 
@@ -97,6 +78,8 @@ async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promi
     }
 
     if (response.status === 401) {
+      // Clears tokens AND notifies useAuth so UI does not stay "logged in".
+      await invalidateIfTokenCurrent(token, endpoint);
       throw new ApiError(
         message === "Something went wrong. Please try again."
           ? "Your session has expired. Please sign in again."
@@ -169,7 +152,9 @@ export const authApi = {
   getUserByToken: async () =>
     apiRequest<{
       id: number; email: string; username: string; role: string;
+      emailVerified?: boolean;
       profileImage?: string; location?: string; phoneNumber?: string; mapsLink?: string;
+      latitude?: number | null; longitude?: number | null;
     }>("/auth/get-user-by-token"),
 
   googleAuth: async (idToken: string) => {
@@ -225,7 +210,8 @@ export const authApi = {
 // ─── Offers API ────────────────────────────────────────────────────────────────
 export const offersApi = {
   getAll: async () => {
-    const resp = await apiRequest<any>("/offers");
+    // Backend caps limit at 100 and returns pagination metadata.
+    const resp = await apiRequest<any>("/offers?limit=100");
     if (!resp) return [];
     if (Array.isArray(resp)) return resp;
     if (Array.isArray(resp.data)) return resp.data;
@@ -251,7 +237,7 @@ export const offersApi = {
   }) => apiRequest<any>("/offers", { method: "POST", body: JSON.stringify(data) }),
 
   update: async (id: number, data: Partial<{
-    title: string; description: string; price: number; originalPrice: number;
+    title: string; description: string; price: number; originalPrice: number | null;
     quantity: number; expirationDate: string; pickupStartTime: string;
     pickupEndTime: string; images: string; foodType: string; taste: string;
   }>) => apiRequest<any>(`/offers/${id}`, { method: "PUT", body: JSON.stringify(data) }),
@@ -261,9 +247,6 @@ export const offersApi = {
 
   delete: async (id: number) =>
     apiRequest<{ message: string }>(`/offers/${id}`, { method: "DELETE" }),
-
-  createRapid: async (data: { title: string; price: number; quantity: number; pickupStartTime?: string; originalPrice?: number }) =>
-    apiRequest<any>("/offers/rapid-minimal", { method: "POST", body: JSON.stringify(data) }),
 };
 
 // ─── Orders API ────────────────────────────────────────────────────────────────
@@ -278,6 +261,10 @@ export const ordersApi = {
 
   cancel: async (id: number) =>
     apiRequest<any>(`/orders/${id}/cancel`, { method: "POST" }),
+
+  /** Soft-hide a finished order from the client's history. */
+  deleteFromHistory: async (id: number) =>
+    apiRequest<any>(`/orders/${id}/history`, { method: "DELETE" }),
 
   confirm: async (id: number) =>
     apiRequest<any>(`/orders/${id}/confirm`, { method: "POST" }),
@@ -316,9 +303,14 @@ export const usersApi = {
   getProfile: async (id: string | number) => apiRequest<any>(`/users/profile/${id}`),
 
   reverseGeocode: async (lat: number, lon: number) =>
-    apiRequest<{ city?: string; state?: string; locationName?: string }>(
-      `/users/reverse-geocode?lat=${lat}&lon=${lon}`
-    ),
+    apiRequest<{
+      city?: string;
+      state?: string;
+      locationName?: string;
+      formattedAddress?: string;
+      latitude?: number;
+      longitude?: number;
+    }>(`/users/reverse-geocode?lat=${lat}&lon=${lon}`),
 
   extractLocation: async (mapsLink: string) =>
     apiRequest<{ locationName?: string; latitude?: number; longitude?: number }>(
@@ -453,6 +445,12 @@ export const notificationsApi = {
   markAllAsRead: async () =>
     apiRequest("/notifications/read-all", { method: "PUT" }),
 
+  deleteOne: async (id: number) =>
+    apiRequest(`/notifications/${id}`, { method: "DELETE" }),
+
+  deleteAll: async () =>
+    apiRequest("/notifications", { method: "DELETE" }),
+
   getSettings: async () =>
     apiRequest<NotificationSettings>("/notifications/settings"),
 
@@ -499,27 +497,64 @@ export const storageApi = {
     url: string; absoluteUrl: string; blurhash?: string; width?: number; height?: number;
   }>> => {
     const token = await tokenStorage.get();
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    // React Native's Blob cannot be built from bytes ("Creating blobs from
+    // ArrayBufferView are not supported"), and winter fetch rejects { uri, name, type }.
+    // Upload through the native multipart client instead.
+    if (Platform.OS !== "web") {
+      const uploaded: Array<{
+        filename: string; originalName: string | null; path: string;
+        url: string; absoluteUrl: string; blurhash?: string; width?: number; height?: number;
+      }> = [];
+
+      for (let index = 0; index < files.length; index++) {
+        const normalized = normalizeUploadFile(files[index], index);
+        const uri = await ensureUploadableUri(normalized.uri, normalized.fileName);
+        const result = await new ExpoFile(uri).upload(`${API_BASE_URL}/storage/upload`, {
+          uploadType: UploadType.MULTIPART,
+          fieldName: "files",
+          mimeType: normalized.mimeType,
+          httpMethod: "POST",
+          sessionType: "foreground",
+          headers,
+        });
+
+        if (result.status === 401) {
+          await invalidateIfTokenCurrent(token, "/storage/upload");
+          throw new ApiError("Your session has expired. Please sign in again.", 401);
+        }
+        if (result.status < 200 || result.status >= 300) {
+          let body: unknown = result.body;
+          try { body = JSON.parse(result.body); } catch { /* keep text */ }
+          throw new Error(extractMessageFromApiBody(body, result.status) || `HTTP ${result.status}`);
+        }
+
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(result.body);
+        } catch {
+          throw new Error("Upload failed");
+        }
+        if (Array.isArray(parsed)) uploaded.push(...parsed);
+        else if (parsed) uploaded.push(parsed);
+      }
+
+      return uploaded;
+    }
+
     const formData = new FormData();
 
     for (let index = 0; index < files.length; index++) {
       const normalized = normalizeUploadFile(files[index], index);
       const uri = await ensureUploadableUri(normalized.uri, normalized.fileName);
       const { fileName, mimeType } = normalized;
-
-      if (Platform.OS === "web") {
-        const blob = await fetch(uri).then((res) => res.blob());
-        formData.append("files", new File([blob], fileName, { type: mimeType }));
-      } else {
-        // React Native FormData accepts { uri, name, type }.
-        // Android requires a readable file:// URI (not content://).
-        formData.append("files", { uri, name: fileName, type: mimeType } as any);
-      }
+      const blob = await fetch(uri).then((res) => res.blob());
+      formData.append("files", new File([blob], fileName, { type: mimeType }));
     }
 
-    const headers: Record<string, string> = {};
-    if (token) headers["Authorization"] = `Bearer ${token}`;
     // Do not set Content-Type — fetch must add the multipart boundary automatically.
-
     const response = await fetch(`${API_BASE_URL}/storage/upload`, {
       method: "POST",
       headers,
@@ -527,6 +562,10 @@ export const storageApi = {
     });
 
     if (!response.ok) {
+      if (response.status === 401) {
+        await invalidateIfTokenCurrent(token, "/storage/upload");
+        throw new ApiError("Your session has expired. Please sign in again.", 401);
+      }
       const errorText = await response.text();
       throw new Error(errorText || `HTTP ${response.status}: ${response.statusText}`);
     }
@@ -534,7 +573,8 @@ export const storageApi = {
     return response.json();
   },
 
-  getFileUrl: (filename: string): string => `${API_BASE_URL}/storage/${filename}`,
+  getFileUrl: (filename: string): string =>
+    resolveStorageAssetUrl(filename) || `${API_BASE_URL}/storage/${filename}`,
 };
 
 // ─── Transform helpers ─────────────────────────────────────────────────────────
@@ -547,11 +587,20 @@ function extractTimeFromDateTime(dateTime: string | Date | null | undefined, def
   } catch { return defaultTime; }
 }
 
+/**
+ * Turns a stored image value into a loadable URL. The backend stores profile
+ * images in several shapes: a full URL (Google/Facebook), "/storage/<file>",
+ * "/store/profile-images/<file>", or a bare "<file>" (saved from the website).
+ * Leftover localhost absoluteUrls and /store vs /storage mismatches are rewritten.
+ */
 export function buildImageUrl(url: string | null | undefined): string | null {
-  if (!url) return null;
-  if (url.startsWith("http://") || url.startsWith("https://")) return url;
-  if (url.startsWith("/")) return `${API_BASE_URL}${url}`;
-  return `${API_BASE_URL}/storage/${url}`;
+  if (typeof url !== "string") return null;
+  const value = url.trim();
+  if (!value || value === "null" || value === "undefined") return null;
+  if (value.startsWith("//")) return `https:${value}`;
+  // Local/preview URIs must not be rewritten as remote storage paths.
+  if (/^(file|content|ph|assets-library|data|blob):/i.test(value)) return value;
+  return resolveStorageAssetUrl(value);
 }
 
 export function transformOfferToProduct(offer: any): any {
@@ -567,14 +616,17 @@ export function transformOfferToProduct(offer: any): any {
 
   const firstImage = images[0] || null;
   const imageUrl =
-    buildImageUrl(firstImage?.absoluteUrl) ||
     buildImageUrl(firstImage?.url) ||
-    (firstImage?.filename ? `${API_BASE_URL}/storage/${firstImage.filename}` : null) ||
+    buildImageUrl(firstImage?.absoluteUrl) ||
+    buildImageUrl(firstImage?.filename) ||
+    buildImageUrl(firstImage?.path) ||
     FALLBACK_IMAGE;
 
-  const ownerImage = owner.profileImage
-    ? (owner.profileImage.startsWith("http") ? owner.profileImage : `${API_BASE_URL}${owner.profileImage}`)
-    : imageUrl;
+  const ownerLogo = buildImageUrl(owner.profileImage);
+  const ownerImage = ownerLogo || imageUrl;
+
+  const latitude = offer.latitude ?? owner.latitude ?? null;
+  const longitude = offer.longitude ?? owner.longitude ?? null;
 
   return {
     id: offer.id,
@@ -586,6 +638,8 @@ export function transformOfferToProduct(offer: any): any {
     quantity: offer.quantity,
     pickupStart: extractTimeFromDateTime(offer.pickupStartTime, "17:00"),
     pickupEnd: extractTimeFromDateTime(offer.pickupEndTime, "18:00"),
+    pickupStartTime: offer.pickupStartTime || null,
+    pickupEndTime: offer.pickupEndTime || null,
     imageUrl,
     store: {
       id: offer.ownerId,
@@ -595,8 +649,10 @@ export function transformOfferToProduct(offer: any): any {
       category: offer.foodType || "Food",
       rating: null,
       imageUrl: ownerImage,
-      logoUrl: owner.profileImage ? ownerImage : undefined,
+      logoUrl: ownerLogo || undefined,
       mapsLink: offer.mapsLink || owner.mapsLink,
+      latitude,
+      longitude,
     },
     expirationDate: offer.expirationDate,
     foodType: offer.foodType,
@@ -637,9 +693,8 @@ export function groupOffersByOwner(offers: any[]): any[] {
     const ownerId = offer.ownerId;
     if (!ownerMap.has(ownerId)) {
       const owner = offer.owner || {};
-      const ownerImage = owner.profileImage
-        ? (owner.profileImage.startsWith("http") ? owner.profileImage : `${API_BASE_URL}${owner.profileImage}`)
-        : FALLBACK_IMAGE;
+      const ownerLogo = buildImageUrl(owner.profileImage);
+      const ownerImage = ownerLogo || FALLBACK_IMAGE;
       ownerMap.set(ownerId, {
         id: ownerId,
         name: owner.username || "Unknown Provider",
@@ -648,8 +703,10 @@ export function groupOffersByOwner(offers: any[]): any[] {
         category: offer.foodType || "Food",
         rating: null,
         imageUrl: ownerImage,
-        logoUrl: owner.profileImage ? ownerImage : undefined,
+        logoUrl: ownerLogo || undefined,
         mapsLink: offer.mapsLink || owner.mapsLink,
+        latitude: offer.latitude ?? owner.latitude ?? null,
+        longitude: offer.longitude ?? owner.longitude ?? null,
         products: [],
       });
     }

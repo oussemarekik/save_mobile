@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
   View, Text, Image, TouchableOpacity, ScrollView,
   StyleSheet, ActivityIndicator, Share, Linking,
@@ -6,6 +6,7 @@ import {
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
+import * as Location from "expo-location";
 import { useProduct, useCreateOrder, useFavorites, useToggleFavorite } from "@/hooks/use-shop";
 import { useAuth } from "@/hooks/use-auth";
 import { useLanguage } from "@/context/LanguageContext";
@@ -14,13 +15,41 @@ import Toast from "react-native-toast-message";
 import { formatPrice } from "@/utils/formatPrice";
 import { isOfferExpired } from "@/utils/offerUtils";
 import { sanitizeErrorMessage } from "@/utils/errorUtils";
+import { calculateDistance, formatDistance } from "@/utils/distanceUtils";
 import { safeGoBack } from "@/lib/navigation";
 import { ratingsApi } from "@/lib/api-client";
+import { LocationMap } from "@/components/LocationMap";
+import { googleMapsSearchUrl, readCoordinates } from "@/lib/maps-link";
 
 const PRIMARY = "#16a34a";
 
 interface Props {
   id: string;
+}
+
+function formatPickupDateLabel(
+  pickupStartTime: string | null | undefined,
+  expirationDate: string | undefined,
+  t: (key: string) => string
+): string | null {
+  const raw = pickupStartTime || expirationDate;
+  if (!raw) return null;
+  const date = new Date(raw);
+  if (isNaN(date.getTime())) return null;
+
+  const today = new Date();
+  const isToday =
+    date.getDate() === today.getDate() &&
+    date.getMonth() === today.getMonth() &&
+    date.getFullYear() === today.getFullYear();
+
+  if (isToday) return t("common.today") || "Today";
+
+  return date.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
 }
 
 export default function ProductDetails({ id }: Props) {
@@ -34,6 +63,8 @@ export default function ProductDetails({ id }: Props) {
   const { mutate: createOrder, isPending } = useCreateOrder();
   const { data: favorites } = useFavorites();
   const { mutate: toggleFavorite } = useToggleFavorite();
+  const [quantity, setQuantity] = useState(1);
+  const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
 
   const providerId = product?.storeId || product?.store?.id;
   const isFavorite = !!providerId && (favorites?.includes(providerId) || false);
@@ -44,6 +75,33 @@ export default function ProductDetails({ id }: Props) {
     enabled: !!providerId,
     retry: 1,
   });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted" || cancelled) return;
+        const pos = await Location.getCurrentPositionAsync({});
+        if (!cancelled) {
+          setUserCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        }
+      } catch {
+        // Location optional for distance display
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (product?.quantity && product.quantity > 0) {
+      setQuantity((q) => Math.min(Math.max(1, q), product.quantity));
+    } else {
+      setQuantity(1);
+    }
+  }, [product?.quantity]);
 
   // ── Loading ──────────────────────────────────────────────────────────────────
   if (isLoading) {
@@ -63,11 +121,37 @@ export default function ProductDetails({ id }: Props) {
     );
   }
 
-  const price = formatPrice(product.price);
-  const originalPrice = formatPrice(product.originalPrice);
+  const priceValue = Number(product.price) || 0;
+  const originalPriceValue = Number(product.originalPrice) || 0;
+  const price = formatPrice(priceValue);
+  const showOriginal =
+    originalPriceValue > priceValue && Number.isFinite(originalPriceValue) && originalPriceValue > 0;
+  const originalPrice = showOriginal ? formatPrice(originalPriceValue) : null;
   const isExpired = isOfferExpired(product.expirationDate);
   const isSoldOut = product.quantity === 0;
   const canOrder = !isExpired && !isSoldOut;
+  const maxQty = Math.max(1, Number(product.quantity) || 1);
+
+  const storeLat = product.store?.latitude != null ? Number(product.store.latitude) : null;
+  const storeLng = product.store?.longitude != null ? Number(product.store.longitude) : null;
+  const distanceKm =
+    userCoords &&
+    storeLat != null &&
+    storeLng != null &&
+    Number.isFinite(storeLat) &&
+    Number.isFinite(storeLng)
+      ? calculateDistance(userCoords.lat, userCoords.lng, storeLat, storeLng)
+      : null;
+  const distanceLabel =
+    distanceKm != null && distanceKm !== Infinity
+      ? formatDistance(distanceKm, "descriptive", t("common.away") || "away")
+      : null;
+
+  const pickupDateLabel = formatPickupDateLabel(
+    product.pickupStartTime,
+    product.expirationDate,
+    t
+  );
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
   const handleOrder = () => {
@@ -89,7 +173,7 @@ export default function ProductDetails({ id }: Props) {
       return;
     }
     createOrder(
-      { productId: product.id, quantity: 1 },
+      { productId: product.id, quantity },
       {
         onSuccess: () => {
           Toast.show({ type: "success", text1: "Order placed!", text2: "Your order has been placed successfully" });
@@ -113,10 +197,21 @@ export default function ProductDetails({ id }: Props) {
       return;
     }
     if (!providerId) return;
-    toggleFavorite(providerId);
-    Toast.show({
-      type: "success",
-      text1: isFavorite ? "Removed from favorites" : "Added to favorites",
+    const wasFavorite = isFavorite;
+    toggleFavorite(providerId, {
+      onSuccess: () => {
+        Toast.show({
+          type: "success",
+          text1: wasFavorite ? "Removed from favorites" : "Added to favorites",
+        });
+      },
+      onError: (error: unknown) => {
+        Toast.show({
+          type: "error",
+          text1: t("common.error") || "Error",
+          text2: sanitizeErrorMessage(error, { defaultMessage: "Failed to update favorites" }),
+        });
+      },
     });
   };
 
@@ -133,10 +228,22 @@ export default function ProductDetails({ id }: Props) {
     } catch (e) {}
   };
 
+  const place = readCoordinates(storeLat, storeLng, product.store?.mapsLink);
+  const directionsUrl = place
+    ? googleMapsSearchUrl(product.store?.address || "", product.store?.name, place.latitude, place.longitude)
+    : product.store?.mapsLink?.trim() ||
+      (product.store?.address?.trim()
+        ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(product.store.address.trim())}`
+        : "");
+
   const handleDirections = () => {
-    const query = encodeURIComponent(product.store.address);
-    Linking.openURL(`https://maps.google.com/?q=${query}`);
+    if (directionsUrl) Linking.openURL(directionsUrl);
   };
+
+  const canOpenDirections =
+    !!product.store?.mapsLink?.trim() ||
+    (storeLat != null && storeLng != null) ||
+    !!product.store?.address?.trim();
 
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
@@ -184,7 +291,9 @@ export default function ProductDetails({ id }: Props) {
             <Text style={styles.storeName}>{product.store.name}</Text>
             <View style={styles.priceBlock}>
               <Text style={styles.price}>{price}</Text>
-              <Text style={styles.originalPrice}>{originalPrice}</Text>
+              {originalPrice && (
+                <Text style={styles.originalPrice}>{originalPrice}</Text>
+              )}
             </View>
           </View>
 
@@ -210,9 +319,37 @@ export default function ProductDetails({ id }: Props) {
             <Ionicons name="time-outline" size={20} color="#c2410c" style={{ marginTop: 2 }} />
             <View>
               <Text style={styles.pickupTitle}>Collection Time</Text>
-              <Text style={styles.pickupTime}>Today {product.pickupStart} - {product.pickupEnd}</Text>
+              <Text style={styles.pickupTime}>
+                {pickupDateLabel ? `${pickupDateLabel} ` : ""}
+                {product.pickupStart} - {product.pickupEnd}
+              </Text>
             </View>
           </View>
+
+          {/* Quantity stepper */}
+          {canOrder && (
+            <View style={styles.qtyRow}>
+              <Text style={styles.qtyLabel}>{t("cart_order.quantity_label") || "Quantity"}</Text>
+              <View style={styles.qtyControls}>
+                <TouchableOpacity
+                  style={[styles.qtyBtn, quantity <= 1 && styles.qtyBtnDisabled]}
+                  onPress={() => setQuantity((q) => Math.max(1, q - 1))}
+                  disabled={quantity <= 1}
+                >
+                  <Ionicons name="remove" size={18} color="#111" />
+                </TouchableOpacity>
+                <Text style={styles.qtyValue}>{quantity}</Text>
+                <TouchableOpacity
+                  style={[styles.qtyBtn, quantity >= maxQty && styles.qtyBtnDisabled]}
+                  onPress={() => setQuantity((q) => Math.min(maxQty, q + 1))}
+                  disabled={quantity >= maxQty}
+                >
+                  <Ionicons name="add" size={18} color="#111" />
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.qtyStock}>{maxQty} {t("common.left") || "left"}</Text>
+            </View>
+          )}
 
           <View style={styles.divider} />
 
@@ -240,21 +377,27 @@ export default function ProductDetails({ id }: Props) {
             <Ionicons name="location-outline" size={20} color="#888" style={{ marginTop: 2 }} />
             <View>
               <Text style={styles.address}>{product.store.address}</Text>
-              <Text style={styles.distance}>1.2 km away</Text>
+              {distanceLabel ? (
+                <Text style={styles.distance}>{distanceLabel}</Text>
+              ) : null}
             </View>
           </View>
 
-          {/* Map placeholder */}
-          <TouchableOpacity style={styles.mapPlaceholder} onPress={handleDirections} activeOpacity={0.85}>
-            <Image
-              source={{ uri: "https://mt1.google.com/vt/lyrs=m&x=13&y=24&z=5" }}
-              style={[StyleSheet.absoluteFill, { opacity: 0.5 }]}
-              resizeMode="cover"
+          {place ? (
+            <LocationMap
+              latitude={place.latitude}
+              longitude={place.longitude}
+              mapsUrl={directionsUrl}
+              height={160}
+              actionLabel={t("common.view_on_maps") || "Get Directions"}
             />
-            <View style={styles.directionsButton}>
-              <Text style={styles.directionsButtonText}>Get Directions</Text>
-            </View>
-          </TouchableOpacity>
+          ) : canOpenDirections ? (
+            <TouchableOpacity style={styles.mapPlaceholder} onPress={handleDirections} activeOpacity={0.85}>
+              <View style={styles.directionsButton}>
+                <Text style={styles.directionsButtonText}>{t("common.view_on_maps") || "Get Directions"}</Text>
+              </View>
+            </TouchableOpacity>
+          ) : null}
 
         </View>
       </ScrollView>
@@ -280,7 +423,9 @@ export default function ProductDetails({ id }: Props) {
           ) : product.quantity > 0 ? (
             <>
               <Ionicons name="bag-outline" size={20} color="#fff" />
-              <Text style={styles.orderButtonText}>Order</Text>
+              <Text style={styles.orderButtonText}>
+                Order · {formatPrice(priceValue * quantity)}
+              </Text>
             </>
           ) : (
             <Text style={styles.orderButtonText}>Sold Out</Text>
@@ -342,6 +487,21 @@ const styles = StyleSheet.create({
   },
   pickupTitle: { fontSize: 13, fontWeight: "700", color: "#9a3412", marginBottom: 2 },
   pickupTime: { fontSize: 13, color: "#c2410c" },
+
+  qtyRow: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    marginTop: 16, paddingVertical: 4,
+  },
+  qtyLabel: { fontSize: 14, fontWeight: "600", color: "#111", flex: 1 },
+  qtyControls: { flexDirection: "row", alignItems: "center", gap: 10 },
+  qtyBtn: {
+    width: 36, height: 36, borderRadius: 10,
+    backgroundColor: "#f5f5f5", borderWidth: 1, borderColor: "#e0e0e0",
+    alignItems: "center", justifyContent: "center",
+  },
+  qtyBtnDisabled: { opacity: 0.4 },
+  qtyValue: { fontSize: 16, fontWeight: "700", color: "#111", minWidth: 24, textAlign: "center" },
+  qtyStock: { fontSize: 12, color: "#888" },
 
   divider: { height: 1, backgroundColor: "#f0f0f0", marginVertical: 20 },
 

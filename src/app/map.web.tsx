@@ -6,10 +6,12 @@ import { useProducts } from "@/hooks/use-shop";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { theme } from "@/lib/theme";
 import { safeGoBack } from "@/lib/navigation";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 export default function MapScreen() {
   const { t } = useLanguage();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { data: products, isLoading } = useProducts();
 
   const withLocation = products?.filter((p: any) => p.store?.latitude && p.store?.longitude) || [];
@@ -40,7 +42,7 @@ export default function MapScreen() {
           )}
         </ScrollView>
       )}
-      <TouchableOpacity style={styles.backBtn} onPress={() => safeGoBack(router, "/(client)/Home")}>
+      <TouchableOpacity style={[styles.backBtn, { bottom: Math.max(insets.bottom, 16) + 8 }]} onPress={() => safeGoBack(router, "/(client)/Home")}>
         <Text style={styles.backText}>{t("common.back") || "Back"}</Text>
       </TouchableOpacity>
     </View>
@@ -64,7 +66,6 @@ const styles = StyleSheet.create({
   cardSub: { fontSize: 13, color: theme.muted, marginTop: 4 },
   backBtn: {
     position: "absolute",
-    bottom: 32,
     alignSelf: "center",
     backgroundColor: theme.primary,
     paddingHorizontal: 24,

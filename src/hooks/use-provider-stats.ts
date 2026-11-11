@@ -21,9 +21,12 @@ export function useProviderStats() {
   });
 
   const confirmedOrders = orders.filter((o: any) => o.status === "confirmed");
-  const revenue = confirmedOrders.reduce((sum: number, order: any) => {
-    const price = order.offer?.price || 0;
-    return sum + (order.quantity || 0) * price;
+  const revenueOrders = orders.filter((o: any) => o.status === "confirmed" && o.collectedAt);
+  const revenue = revenueOrders.reduce((sum: number, order: any) => {
+    const totalPrice =
+      order.totalPrice ??
+      (order.offer?.price || 0) * (order.quantity || 0);
+    return sum + (totalPrice || 0);
   }, 0);
   const totalMealsSaved = confirmedOrders.reduce((sum: number, order: any) => sum + (order.quantity || 0), 0);
   const co2Saved = co2SavedFromMeals(totalMealsSaved);

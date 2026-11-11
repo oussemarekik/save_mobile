@@ -11,17 +11,31 @@ import {
 import { useProducts, useFavorites } from "@/hooks/use-shop";
 import { BagCard } from "@/components/BagCard";
 import { Ionicons } from "@expo/vector-icons";
+import { useLanguage } from "@/context/LanguageContext";
+import { useHeaderTopPadding, useTabScreenContentInsets } from "@/lib/screen-insets";
+import { isOfferExpired } from "@/utils/offerUtils";
 
 const FILTERS = ["all", "available", "favorites"] as const;
 type Filter = typeof FILTERS[number];
 
 export default function Browse() {
-  const { data: products, isLoading } = useProducts();
+  const { t } = useLanguage();
+  const { data: products, isLoading, isError, refetch } = useProducts();
   const { data: favorites } = useFavorites();
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
+  const headerTop = useHeaderTopPadding();
+  const contentInsets = useTabScreenContentInsets();
+
+  const filterLabel = (f: Filter) => {
+    if (f === "all") return t("offers.filter_all") || "All";
+    if (f === "available") return t("offers.filter_available") || "Available";
+    return t("offers.filter_favorites") || "Favorites";
+  };
 
   const filteredProducts = products?.filter((p: any) => {
+    if (isOfferExpired(p.expirationDate)) return false;
+
     const matchesSearch =
       !search.trim() ||
       p.name?.toLowerCase().includes(search.toLowerCase()) ||
@@ -37,33 +51,15 @@ export default function Browse() {
     return true;
   });
 
-  const renderHeader = () => (
-    <View>
-      {/* Filter chips */}
-      <View style={styles.filtersRow}>
-        {FILTERS.map((f) => (
-          <TouchableOpacity
-            key={f}
-            onPress={() => setFilter(f)}
-            style={[styles.chip, filter === f && styles.chipActive]}
-            activeOpacity={0.8}
-          >
-            <Text style={[styles.chipText, filter === f && styles.chipTextActive]}>
-              {f.charAt(0).toUpperCase() + f.slice(1)}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-    </View>
-  );
-
   const renderEmpty = () => (
     <View style={styles.emptyContainer}>
       <View style={styles.emptyIcon}>
         <Ionicons name="search-outline" size={32} color="#888" />
       </View>
-      <Text style={styles.emptyTitle}>No bags found</Text>
-      <Text style={styles.emptySubtitle}>Try adjusting your filters or search area.</Text>
+      <Text style={styles.emptyTitle}>{t("offers.no_results") || "No bags found"}</Text>
+      <Text style={styles.emptySubtitle}>
+        {t("offers.try_adjusting_filters") || "Try adjusting your filters or search area."}
+      </Text>
     </View>
   );
 
@@ -78,8 +74,8 @@ export default function Browse() {
   return (
     <View style={styles.container}>
       {/* Sticky Header */}
-      <View style={styles.stickyHeader}>
-        <Text style={styles.title}>Browse</Text>
+      <View style={[styles.stickyHeader, { paddingTop: headerTop }]}>
+        <Text style={styles.title}>{t("nav.view_offers") || "Browse"}</Text>
 
         {/* Search Bar */}
         <View style={styles.searchRow}>
@@ -87,15 +83,12 @@ export default function Browse() {
             <Ionicons name="search-outline" size={18} color="#888" style={styles.searchIcon} />
             <TextInput
               style={styles.searchInput}
-              placeholder="Search offers..."
+              placeholder={t("offers.search_placeholder") || "Search offers..."}
               placeholderTextColor="#888"
               value={search}
               onChangeText={setSearch}
             />
           </View>
-          <TouchableOpacity style={styles.filterButton} activeOpacity={0.8}>
-            <Ionicons name="options-outline" size={22} color="#111" />
-          </TouchableOpacity>
         </View>
 
         {/* Filter chips row */}
@@ -108,7 +101,7 @@ export default function Browse() {
               activeOpacity={0.8}
             >
               <Text style={[styles.chipText, filter === f && styles.chipTextActive]}>
-                {f.charAt(0).toUpperCase() + f.slice(1)}
+                {filterLabel(f)}
               </Text>
             </TouchableOpacity>
           ))}
@@ -118,6 +111,14 @@ export default function Browse() {
       {/* Content */}
       {isLoading ? (
         renderSkeleton()
+      ) : isError ? (
+        <View style={styles.emptyContainer}>
+          <Ionicons name="alert-circle-outline" size={32} color="#ef4444" />
+          <Text style={styles.emptyTitle}>{t("offers.error_fetch") || "Unable to load offers"}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={() => refetch()}>
+            <Text style={styles.retryButtonText}>{t("common.try_again") || "Try Again"}</Text>
+          </TouchableOpacity>
+        </View>
       ) : (
         <FlatList
           data={filteredProducts}
@@ -126,7 +127,7 @@ export default function Browse() {
             <BagCard product={item} store={item.store} />
           )}
           ListEmptyComponent={renderEmpty}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[styles.listContent, contentInsets]}
           showsVerticalScrollIndicator={false}
         />
       )}
@@ -144,7 +145,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#e0e0e0",
     paddingHorizontal: 16,
-    paddingTop: 16,
     paddingBottom: 12,
     zIndex: 10,
   },
@@ -176,16 +176,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#111",
   },
-  filterButton: {
-    padding: 10,
-    borderRadius: 12,
-    backgroundColor: "#f5f5f5",
-    alignItems: "center",
-    justifyContent: "center",
-  },
   filtersRow: {
     flexDirection: "row",
     gap: 8,
+    flexWrap: "wrap",
   },
   chip: {
     paddingHorizontal: 16,
@@ -208,8 +202,7 @@ const styles = StyleSheet.create({
     color: "#fff",
   },
   listContent: {
-    padding: 16,
-    paddingBottom: 100,
+    paddingHorizontal: 16,
     gap: 16,
   },
   skeletonGrid: {
@@ -225,6 +218,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: 80,
+    gap: 8,
   },
   emptyIcon: {
     width: 64,
@@ -240,10 +234,21 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#111",
     marginBottom: 4,
+    textAlign: "center",
+    paddingHorizontal: 24,
   },
   emptySubtitle: {
     fontSize: 14,
     color: "#888",
     textAlign: "center",
+    paddingHorizontal: 24,
   },
+  retryButton: {
+    marginTop: 12,
+    backgroundColor: "#16a34a",
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+  },
+  retryButtonText: { color: "#fff", fontWeight: "700", fontSize: 14 },
 });

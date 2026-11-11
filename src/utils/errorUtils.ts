@@ -35,15 +35,40 @@ export function isTechnicalError(message: string): boolean {
   return technicalIndicators.some((indicator) => lower.includes(indicator.toLowerCase()));
 }
 
+function isAuthAction(action?: string): boolean {
+  if (!action) return false;
+  const lower = action.toLowerCase();
+  return (
+    lower.includes("sign in") ||
+    lower.includes("sign up") ||
+    lower.includes("signin") ||
+    lower.includes("signup") ||
+    lower.includes("login") ||
+    lower.includes("authenticate") ||
+    lower.includes("password")
+  );
+}
+
 function genericMessageForStatus(status: number, action?: string): string {
-  if (status === 401 || status === 404) {
-    return "Invalid email or password. Please check your credentials and try again.";
+  const auth = isAuthAction(action);
+
+  if (status === 401) {
+    return auth
+      ? "Invalid email or password. Please check your credentials and try again."
+      : "Your session has expired. Please sign in again.";
+  }
+  if (status === 404) {
+    return auth
+      ? "Invalid email or password. Please check your credentials and try again."
+      : "The requested item was not found.";
   }
   if (status === 409) {
-    return "An account with this email already exists. Please sign in instead.";
+    return auth
+      ? "An account with this email already exists. Please sign in instead."
+      : "This action conflicts with current data. Please refresh and try again.";
   }
   if (status === 400) {
-    return action?.includes("sign")
+    return auth
       ? "Unable to create account. Please check your information and try again."
       : "Invalid request. Please check your input and try again.";
   }

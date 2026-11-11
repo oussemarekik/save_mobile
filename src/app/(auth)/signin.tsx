@@ -9,28 +9,35 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
 } from "react-native";
-import { useRouter, Link, useLocalSearchParams, Redirect } from "expo-router";
+import { useRouter, useLocalSearchParams, Redirect } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { authApi, usersApi } from "@/lib/api-client";
 import { useAuth } from "@/hooks/use-auth";
 import { getPostAuthRedirect } from "@/lib/redirect-utils";
-import { readAuthIntentRole } from "@/lib/authIntent";
-import { GoogleOAuthButton, FacebookOAuthButton } from "@/components/OAuthButtons";
+import { clearAuthIntentRole, readAuthIntentRole } from "@/lib/authIntent";
 import { useLanguage } from "@/context/LanguageContext";
 import Toast from "react-native-toast-message";
 import { Ionicons } from "@expo/vector-icons";
-import { theme } from "@/lib/theme";
 import { ApiError, sanitizeErrorMessage } from "@/utils/errorUtils";
 
-type ViewMode = "main" | "verify" | "forgot" | "reset";
+type ViewMode = "email" | "password" | "signup" | "verify" | "forgot" | "reset";
+
+/** Too Good To Go–style auth palette */
+const GREEN = "#004225";
+const CREAM = "#F7F5F0";
+const MUTED = "#5C6B63";
+const LINE = "#C8CFC9";
 
 export default function SignIn() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { mode } = useLocalSearchParams<{ mode?: string }>();
   const { user, isLoading: authLoading, refreshAuth } = useAuth();
   const { t } = useLanguage();
 
-  const [view, setView] = useState<ViewMode>("main");
+  const [view, setView] = useState<ViewMode>(mode === "signup" ? "email" : "email");
   const [isSignUp, setIsSignUp] = useState(mode === "signup");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
@@ -52,7 +59,10 @@ export default function SignIn() {
   const [showNewPassword, setShowNewPassword] = useState(false);
 
   useEffect(() => {
-    if (mode === "signup") setIsSignUp(true);
+    if (mode === "signup") {
+      setIsSignUp(true);
+      setView("email");
+    }
   }, [mode]);
 
   useEffect(() => {
@@ -74,7 +84,7 @@ export default function SignIn() {
   if (authLoading) {
     return (
       <View style={styles.loading}>
-        <ActivityIndicator size="large" color={theme.primary} />
+        <ActivityIndicator size="large" color={GREEN} />
       </View>
     );
   }
@@ -91,11 +101,19 @@ export default function SignIn() {
     Toast.show({ type: "success", text1: t("common.success"), text2: message });
   };
 
-  const handleSignIn = async () => {
+  const handleEmailContinue = () => {
     if (!email.includes("@")) {
       showError(t("signin.error_email_required"));
       return;
     }
+    if (isSignUp) {
+      setView("signup");
+    } else {
+      setView("password");
+    }
+  };
+
+  const handleSignIn = async () => {
     if (!password) {
       showError(t("signin.error_password_required"));
       return;
@@ -110,7 +128,7 @@ export default function SignIn() {
         try {
           await usersApi.setRole("CLIENT");
         } catch {
-          // continue with redirect
+          // continue
         }
       }
 
@@ -132,10 +150,6 @@ export default function SignIn() {
   };
 
   const handleSignUp = async () => {
-    if (!email.includes("@")) {
-      showError(t("signin.error_email_required"));
-      return;
-    }
     if (!username.trim()) {
       showError(t("signin.error_username_required"));
       return;
@@ -160,7 +174,7 @@ export default function SignIn() {
     setSubmitting(true);
     try {
       const response = await authApi.register(email.trim(), username.trim(), password);
-      const emailVerified = response.user?.emailVerified !== false;
+      await refreshAuth();
 
       if (response.user && response.user.emailVerified === false) {
         setSignUpEmail(email.trim());
@@ -174,13 +188,11 @@ export default function SignIn() {
         return;
       }
 
-      const intentRole = await readAuthIntentRole();
-      const targetRole = intentRole === "PROVIDER" ? "PROVIDER" : "CLIENT";
-      await usersApi.setRole(targetRole);
+      // Consumer signup form always becomes CLIENT — do not inherit stale PROVIDER intent.
+      await usersApi.setRole("CLIENT");
+      await clearAuthIntentRole();
       await refreshAuth();
-      router.replace(
-        targetRole === "PROVIDER" ? "/(provider)/dashboard" : "/(client)/Home"
-      );
+      router.replace("/(client)/Home");
     } catch (error: any) {
       if (error instanceof ApiError && error.status === 409) {
         showError(t("signin.error_account_exists"));
@@ -188,6 +200,7 @@ export default function SignIn() {
         setPassword("");
         setUsername("");
         setConfirmPassword("");
+        setView("password");
         return;
       }
       const msg = sanitizeErrorMessage(error, {
@@ -200,6 +213,7 @@ export default function SignIn() {
         setPassword("");
         setUsername("");
         setConfirmPassword("");
+        setView("password");
       } else {
         showError(msg);
       }
@@ -271,6 +285,11 @@ export default function SignIn() {
   };
 
   const handleExploreWithoutVerification = async () => {
+    const intentRole = await readAuthIntentRole();
+    if (intentRole === "PROVIDER") {
+      showError(t("signin.explore_provider_blocked"));
+      return;
+    }
     try {
       await usersApi.setRole("CLIENT");
       await refreshAuth();
@@ -346,8 +365,8 @@ export default function SignIn() {
         showSuccess(t("signin.reset_password_success"));
         setEmail(forgotPasswordEmail.trim());
         setPassword("");
-        setView("main");
         setIsSignUp(false);
+        setView("password");
         setResetCode("");
         setNewPassword("");
         setConfirmNewPassword("");
@@ -367,316 +386,333 @@ export default function SignIn() {
     }
   };
 
-  const renderMain = () => (
-    <>
-      <View style={styles.toggleRow}>
-        <TouchableOpacity
-          style={[styles.toggleBtn, !isSignUp && styles.toggleBtnActive]}
-          onPress={() => setIsSignUp(false)}
-        >
-          <Text style={[styles.toggleText, !isSignUp && styles.toggleTextActive]}>
-            {t("signin.sign_in")}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.toggleBtn, isSignUp && styles.toggleBtnActive]}
-          onPress={() => setIsSignUp(true)}
-        >
-          <Text style={[styles.toggleText, isSignUp && styles.toggleTextActive]}>
-            {t("signin.sign_up")}
-          </Text>
-        </TouchableOpacity>
-      </View>
+  const goBack = () => {
+    if (view === "password" || view === "signup") {
+      setView("email");
+      setPassword("");
+      setConfirmPassword("");
+      setShowPassword(false);
+      return;
+    }
+    if (view === "verify") {
+      setView("signup");
+      return;
+    }
+    if (view === "forgot") {
+      setView("password");
+      return;
+    }
+    if (view === "reset") {
+      setView("forgot");
+      return;
+    }
+    if (router.canGoBack()) router.back();
+    else router.replace("/(auth)/welcome");
+  };
 
-      <View style={styles.fieldGroup}>
-        <Text style={styles.label}>{t("signin.email_label")}</Text>
-        <InputField
-          icon="mail-outline"
-          value={email}
-          onChangeText={setEmail}
-          placeholder={t("signin.email_placeholder")}
-          keyboardType="email-address"
-        />
-      </View>
+  const busy = view === "verify" ? verifyingCode : submitting;
 
-      {isSignUp && (
-        <View style={styles.fieldGroup}>
-          <Text style={styles.label}>{t("signin.username_label")}</Text>
-          <InputField
-            icon="person-outline"
-            value={username}
-            onChangeText={setUsername}
-            placeholder={t("signin.username_placeholder")}
-          />
-        </View>
-      )}
+  const onPrimary = () => {
+    if (view === "email") return handleEmailContinue();
+    if (view === "password") return handleSignIn();
+    if (view === "signup") return handleSignUp();
+    if (view === "verify") return handleVerifyCode();
+    if (view === "forgot") return handleForgotPassword();
+    if (view === "reset") return handleResetPassword();
+  };
 
-      <View style={styles.fieldGroup}>
-        <Text style={styles.label}>{t("signin.password_label")}</Text>
-        <InputField
-          icon="lock-closed-outline"
-          value={password}
-          onChangeText={setPassword}
-          placeholder={
-            isSignUp ? t("signin.password_placeholder_signup") : t("signin.password_placeholder_signin")
-          }
-          secure
-          showPassword={showPassword}
-          onTogglePassword={() => setShowPassword(!showPassword)}
-        />
-        {isSignUp && <Text style={styles.hint}>{t("signin.password_hint")}</Text>}
-      </View>
+  const primaryLabel =
+    view === "email"
+      ? t("common.continue") || "Continue"
+      : view === "password"
+        ? t("signin.sign_in")
+        : view === "signup"
+          ? t("signin.sign_up")
+          : view === "verify"
+            ? t("signin.verify_button")
+            : view === "forgot"
+              ? t("signin.forgot_password_send") || "Send reset code"
+              : t("signin.reset_password_button");
 
-      {isSignUp && (
-        <View style={styles.fieldGroup}>
-          <Text style={styles.label}>{t("signin.confirm_password_label")}</Text>
-          <InputField
-            icon="lock-closed-outline"
-            value={confirmPassword}
-            onChangeText={setConfirmPassword}
-            placeholder={t("signin.confirm_password_placeholder")}
-            secure
-          />
-        </View>
-      )}
-
-      {isSignUp && (
-        <TouchableOpacity
-          style={styles.termsRow}
-          onPress={() => setTermsAccepted(!termsAccepted)}
-          activeOpacity={0.8}
-        >
-          <Ionicons
-            name={termsAccepted ? "checkbox" : "square-outline"}
-            size={22}
-            color={termsAccepted ? theme.primary : "#888"}
-          />
-          <Text style={styles.termsText}>
-            {t("signin.terms_accept")}{" "}
-            <Text
-              style={styles.termsLink}
-              onPress={() => router.push("/legal/terms" as any)}
-            >
-              {t("signin.terms_link")}
-            </Text>{" "}
-            {t("signin.terms_and")}{" "}
-            <Text
-              style={styles.termsLink}
-              onPress={() => router.push("/legal/privacy" as any)}
-            >
-              {t("signin.privacy_link")}
-            </Text>
-          </Text>
-        </TouchableOpacity>
-      )}
-
-      {!isSignUp && (
-        <TouchableOpacity
-          onPress={() => {
-            setForgotPasswordEmail(email);
-            setView("forgot");
-          }}
-        >
-          <Text style={styles.forgotLink}>
-            {t("signin.forgot_password") || "Forgot password?"}
-          </Text>
-        </TouchableOpacity>
-      )}
-
-      <TouchableOpacity
-        style={[styles.primaryButton, submitting && styles.disabled]}
-        onPress={isSignUp ? handleSignUp : handleSignIn}
-        disabled={submitting}
-      >
-        {submitting ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.primaryButtonText}>
-            {isSignUp ? t("signin.sign_up") : t("signin.sign_in")}
-          </Text>
-        )}
-      </TouchableOpacity>
-
-      <View style={styles.divider}>
-        <View style={styles.dividerLine} />
-        <Text style={styles.dividerText}>{t("signin.or_continue_with")}</Text>
-        <View style={styles.dividerLine} />
-      </View>
-
-      <GoogleOAuthButton />
-      <View style={{ height: 12 }} />
-      <FacebookOAuthButton />
-
-      <View style={styles.section}>
-        <Text style={styles.mutedText}>{t("landing.for_business")}</Text>
-        <Link href="/(auth)/ProviderSignup" asChild>
-          <TouchableOpacity style={styles.secondaryButton}>
-            <Text style={styles.secondaryButtonText}>{t("landing.register_business")}</Text>
-          </TouchableOpacity>
-        </Link>
-      </View>
-    </>
-  );
-
-  const renderVerify = () => (
-    <>
-      <Text style={styles.viewTitle}>{t("signin.verify_email_title")}</Text>
-      <Text style={styles.viewDesc}>
-        {t("signin.verify_email_desc")} <Text style={styles.emailHighlight}>{signUpEmail}</Text>
-      </Text>
-      <View style={styles.fieldGroup}>
-        <Text style={styles.label}>{t("signin.verification_code_label")}</Text>
-        <TextInput
-          style={styles.codeInput}
-          value={verificationCode}
-          onChangeText={(v) => setVerificationCode(v.replace(/\D/g, "").slice(0, 6))}
-          placeholder={t("signin.verification_code_placeholder")}
-          keyboardType="number-pad"
-          maxLength={6}
-        />
-        <Text style={styles.hint}>{t("signin.verification_code_hint")}</Text>
-      </View>
-      <TouchableOpacity
-        style={[styles.primaryButton, verifyingCode && styles.disabled]}
-        onPress={handleVerifyCode}
-        disabled={verifyingCode}
-      >
-        {verifyingCode ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.primaryButtonText}>{t("signin.verify_button")}</Text>
-        )}
-      </TouchableOpacity>
-      <TouchableOpacity onPress={handleResendCode} disabled={submitting} style={styles.linkBtn}>
-        <Text style={styles.linkText}>{submitting ? t("signin.sending") : t("signin.resend_code")}</Text>
-      </TouchableOpacity>
-      <TouchableOpacity onPress={handleExploreWithoutVerification} style={styles.linkBtn}>
-        <Text style={styles.mutedLink}>{t("signin.explore_platform") || "Explore the platform"}</Text>
-      </TouchableOpacity>
-      <TouchableOpacity onPress={() => setView("main")} style={styles.linkBtn}>
-        <Text style={styles.linkText}>{t("signin.back_to_signin")}</Text>
-      </TouchableOpacity>
-    </>
-  );
-
-  const renderForgot = () => (
-    <>
-      <Text style={styles.viewTitle}>{t("signin.forgot_password_title")}</Text>
-      <Text style={styles.viewDesc}>{t("signin.forgot_password_desc")}</Text>
-      <View style={styles.fieldGroup}>
-        <Text style={styles.label}>{t("signin.forgot_password_email_label")}</Text>
-        <InputField
-          icon="mail-outline"
-          value={forgotPasswordEmail}
-          onChangeText={setForgotPasswordEmail}
-          placeholder={t("signin.forgot_password_email_placeholder")}
-          keyboardType="email-address"
-        />
-      </View>
-      <TouchableOpacity
-        style={[styles.primaryButton, submitting && styles.disabled]}
-        onPress={handleForgotPassword}
-        disabled={submitting}
-      >
-        {submitting ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.primaryButtonText}>
-            {t("signin.forgot_password_send") || t("signin.forgot_password_send_code") || "Send reset code"}
-          </Text>
-        )}
-      </TouchableOpacity>
-      <TouchableOpacity onPress={() => setView("main")} style={styles.linkBtn}>
-        <Text style={styles.linkText}>{t("signin.back_to_signin")}</Text>
-      </TouchableOpacity>
-    </>
-  );
-
-  const renderReset = () => (
-    <>
-      <Text style={styles.viewTitle}>{t("signin.reset_password_title")}</Text>
-      <Text style={styles.viewDesc}>
-        {t("signin.reset_password_desc")}{" "}
-        <Text style={styles.emailHighlight}>{forgotPasswordEmail}</Text>
-      </Text>
-      <View style={styles.fieldGroup}>
-        <Text style={styles.label}>{t("signin.reset_password_code_label")}</Text>
-        <TextInput
-          style={styles.codeInput}
-          value={resetCode}
-          onChangeText={(v) => setResetCode(v.replace(/\D/g, "").slice(0, 6))}
-          placeholder={t("signin.reset_password_code_placeholder")}
-          keyboardType="number-pad"
-          maxLength={6}
-        />
-      </View>
-      <View style={styles.fieldGroup}>
-        <Text style={styles.label}>{t("signin.reset_password_new_label")}</Text>
-        <InputField
-          icon="lock-closed-outline"
-          value={newPassword}
-          onChangeText={setNewPassword}
-          placeholder={t("signin.reset_password_new_placeholder")}
-          secure
-          showPassword={showNewPassword}
-          onTogglePassword={() => setShowNewPassword(!showNewPassword)}
-        />
-      </View>
-      <View style={styles.fieldGroup}>
-        <Text style={styles.label}>{t("signin.reset_password_confirm_label")}</Text>
-        <InputField
-          icon="lock-closed-outline"
-          value={confirmNewPassword}
-          onChangeText={setConfirmNewPassword}
-          placeholder={t("signin.reset_password_confirm_placeholder")}
-          secure
-          showPassword={showNewPassword}
-          onTogglePassword={() => setShowNewPassword(!showNewPassword)}
-        />
-      </View>
-      <TouchableOpacity
-        style={[styles.primaryButton, submitting && styles.disabled]}
-        onPress={handleResetPassword}
-        disabled={submitting}
-      >
-        {submitting ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.primaryButtonText}>{t("signin.reset_password_button")}</Text>
-        )}
-      </TouchableOpacity>
-      <TouchableOpacity onPress={() => setView("forgot")} style={styles.linkBtn}>
-        <Text style={styles.linkText}>{t("signin.request_new_code")}</Text>
-      </TouchableOpacity>
-    </>
-  );
+  const headline =
+    view === "email"
+      ? isSignUp
+        ? t("signin.tgtg_email_signup") || "What's your email?"
+        : t("signin.tgtg_email_login") || "What's your email?"
+      : view === "password"
+        ? t("signin.tgtg_password") || "Enter your password"
+        : view === "signup"
+          ? t("signin.tgtg_create") || "Create your account"
+          : view === "verify"
+            ? t("signin.verify_email_title")
+            : view === "forgot"
+              ? t("signin.forgot_password_title")
+              : t("signin.reset_password_title");
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-    >
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-        <View style={styles.header}>
-          <Text style={styles.title}>
-            {isSignUp ? t("signin.welcome_new") : t("signin.welcome_back")}
-          </Text>
-          <Text style={styles.subtitle}>
-            {isSignUp ? t("signin.description_new") : t("signin.description_back")}
-          </Text>
-        </View>
+    <View style={[styles.root, { paddingTop: insets.top }]}>
+      <View style={styles.nav}>
+        <TouchableOpacity
+          onPress={goBack}
+          style={styles.navBack}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        >
+          <Ionicons name="chevron-back" size={28} color={GREEN} />
+        </TouchableOpacity>
+      </View>
 
-        {view === "main" && renderMain()}
-        {view === "verify" && renderVerify()}
-        {view === "forgot" && renderForgot()}
-        {view === "reset" && renderReset()}
-      </ScrollView>
-    </KeyboardAvoidingView>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          bounces={false}
+        >
+          <Text style={styles.headline}>{headline}</Text>
+
+          {view === "email" && (
+            <>
+              <Text style={styles.helper}>
+                {isSignUp
+                  ? t("signin.description_new")
+                  : t("signin.tgtg_email_helper") ||
+                    "We'll use this to find your account."}
+              </Text>
+              <UnderlineInput
+                value={email}
+                onChangeText={setEmail}
+                placeholder={t("signin.email_placeholder")}
+                keyboardType="email-address"
+                autoComplete="email"
+                textContentType="emailAddress"
+                autoFocus
+                returnKeyType="next"
+                onSubmitEditing={handleEmailContinue}
+              />
+              <TouchableOpacity
+                style={styles.switchHit}
+                onPress={() => {
+                  setIsSignUp(!isSignUp);
+                  setPassword("");
+                  setConfirmPassword("");
+                  setUsername("");
+                }}
+              >
+                <Text style={styles.switchText}>
+                  {isSignUp ? t("signin.have_account") : t("signin.no_account")}{" "}
+                  <Text style={styles.switchLink}>
+                    {isSignUp ? t("signin.sign_in") : t("signin.sign_up")}
+                  </Text>
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
+
+          {view === "password" && (
+            <>
+              <Text style={styles.helper}>
+                {email}
+              </Text>
+              <UnderlineInput
+                value={password}
+                onChangeText={setPassword}
+                placeholder={t("signin.password_placeholder_signin")}
+                secure
+                showPassword={showPassword}
+                onTogglePassword={() => setShowPassword(!showPassword)}
+                autoComplete="password"
+                textContentType="password"
+                autoFocus
+                returnKeyType="go"
+                onSubmitEditing={handleSignIn}
+              />
+              <TouchableOpacity
+                onPress={() => {
+                  setForgotPasswordEmail(email);
+                  setView("forgot");
+                }}
+                style={styles.forgotHit}
+              >
+                <Text style={styles.forgotText}>
+                  {t("signin.forgot_password") || "Forgot password?"}
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
+
+          {view === "signup" && (
+            <>
+              <Text style={styles.helper}>{email}</Text>
+              <UnderlineInput
+                value={username}
+                onChangeText={setUsername}
+                placeholder={t("signin.username_placeholder")}
+                autoComplete="username"
+                textContentType="username"
+                autoFocus
+              />
+              <UnderlineInput
+                value={password}
+                onChangeText={setPassword}
+                placeholder={t("signin.password_placeholder_signup")}
+                secure
+                showPassword={showPassword}
+                onTogglePassword={() => setShowPassword(!showPassword)}
+                autoComplete="password-new"
+                textContentType="newPassword"
+              />
+              <Text style={styles.hint}>{t("signin.password_hint")}</Text>
+              <UnderlineInput
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                placeholder={t("signin.confirm_password_placeholder")}
+                secure
+                showPassword={showPassword}
+                onTogglePassword={() => setShowPassword(!showPassword)}
+                autoComplete="password-new"
+                textContentType="newPassword"
+              />
+              <Pressable
+                style={styles.termsRow}
+                onPress={() => setTermsAccepted(!termsAccepted)}
+              >
+                <View style={[styles.checkbox, termsAccepted && styles.checkboxOn]}>
+                  {termsAccepted ? (
+                    <Ionicons name="checkmark" size={14} color="#fff" />
+                  ) : null}
+                </View>
+                <Text style={styles.termsText}>
+                  {t("signin.terms_accept")}{" "}
+                  <Text
+                    style={styles.termsLink}
+                    onPress={() => router.push("/legal/terms" as any)}
+                  >
+                    {t("signin.terms_link")}
+                  </Text>{" "}
+                  {t("signin.terms_and")}{" "}
+                  <Text
+                    style={styles.termsLink}
+                    onPress={() => router.push("/legal/privacy" as any)}
+                  >
+                    {t("signin.privacy_link")}
+                  </Text>
+                </Text>
+              </Pressable>
+            </>
+          )}
+
+          {view === "verify" && (
+            <>
+              <Text style={styles.helper}>
+                {t("signin.verify_email_desc")}{" "}
+                <Text style={styles.emphasis}>{signUpEmail}</Text>
+              </Text>
+              <UnderlineInput
+                value={verificationCode}
+                onChangeText={(v) =>
+                  setVerificationCode(v.replace(/\D/g, "").slice(0, 6))
+                }
+                placeholder={t("signin.verification_code_placeholder")}
+                keyboardType="number-pad"
+                textContentType="oneTimeCode"
+                autoComplete="sms-otp"
+                maxLength={6}
+                center
+                autoFocus
+              />
+              <TouchableOpacity onPress={handleResendCode} disabled={submitting}>
+                <Text style={styles.forgotText}>
+                  {submitting ? t("signin.sending") : t("signin.resend_code")}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={handleExploreWithoutVerification}>
+                <Text style={styles.mutedLink}>
+                  {t("signin.explore_platform") || "Explore the platform"}
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
+
+          {view === "forgot" && (
+            <>
+              <Text style={styles.helper}>{t("signin.forgot_password_desc")}</Text>
+              <UnderlineInput
+                value={forgotPasswordEmail}
+                onChangeText={setForgotPasswordEmail}
+                placeholder={t("signin.forgot_password_email_placeholder")}
+                keyboardType="email-address"
+                autoComplete="email"
+                textContentType="emailAddress"
+                autoFocus
+              />
+            </>
+          )}
+
+          {view === "reset" && (
+            <>
+              <Text style={styles.helper}>
+                {t("signin.reset_password_desc")}{" "}
+                <Text style={styles.emphasis}>{forgotPasswordEmail}</Text>
+              </Text>
+              <UnderlineInput
+                value={resetCode}
+                onChangeText={(v) => setResetCode(v.replace(/\D/g, "").slice(0, 6))}
+                placeholder={t("signin.reset_password_code_placeholder")}
+                keyboardType="number-pad"
+                textContentType="oneTimeCode"
+                maxLength={6}
+                center
+                autoFocus
+              />
+              <UnderlineInput
+                value={newPassword}
+                onChangeText={setNewPassword}
+                placeholder={t("signin.reset_password_new_placeholder")}
+                secure
+                showPassword={showNewPassword}
+                onTogglePassword={() => setShowNewPassword(!showNewPassword)}
+                textContentType="newPassword"
+              />
+              <UnderlineInput
+                value={confirmNewPassword}
+                onChangeText={setConfirmNewPassword}
+                placeholder={t("signin.reset_password_confirm_placeholder")}
+                secure
+                showPassword={showNewPassword}
+                onTogglePassword={() => setShowNewPassword(!showNewPassword)}
+                textContentType="newPassword"
+              />
+              <TouchableOpacity onPress={() => setView("forgot")}>
+                <Text style={styles.forgotText}>{t("signin.request_new_code")}</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </ScrollView>
+
+        <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+          <TouchableOpacity
+            style={[styles.pill, busy && styles.pillDisabled]}
+            onPress={onPrimary}
+            disabled={busy}
+            activeOpacity={0.88}
+          >
+            {busy ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.pillText}>{primaryLabel}</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
-function InputField({
-  icon,
+function UnderlineInput({
   value,
   onChangeText,
   placeholder,
@@ -684,117 +720,236 @@ function InputField({
   secure,
   showPassword,
   onTogglePassword,
+  autoComplete,
+  textContentType,
+  maxLength,
+  center,
+  autoFocus,
+  returnKeyType,
+  onSubmitEditing,
 }: {
-  icon: string;
   value: string;
   onChangeText: (v: string) => void;
   placeholder?: string;
-  keyboardType?: "default" | "email-address" | "phone-pad";
+  keyboardType?: "default" | "email-address" | "phone-pad" | "number-pad";
   secure?: boolean;
   showPassword?: boolean;
   onTogglePassword?: () => void;
+  autoComplete?: any;
+  textContentType?: any;
+  maxLength?: number;
+  center?: boolean;
+  autoFocus?: boolean;
+  returnKeyType?: "next" | "go" | "done";
+  onSubmitEditing?: () => void;
 }) {
+  const [focused, setFocused] = useState(false);
+
   return (
-    <View style={styles.inputWrapper}>
-      <Ionicons name={icon as any} size={20} color="#888" style={styles.inputIcon} />
+    <View style={[styles.inputWrap, focused && styles.inputWrapFocused]}>
       <TextInput
-        style={[styles.input, secure && onTogglePassword && { paddingRight: 44 }]}
+        style={[
+          styles.input,
+          center && styles.inputCenter,
+          secure && onTogglePassword ? { paddingRight: 40 } : null,
+        ]}
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor="#888"
+        placeholderTextColor="#9AA59E"
         keyboardType={keyboardType}
         autoCapitalize="none"
+        autoCorrect={false}
         secureTextEntry={secure && !showPassword}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        autoComplete={autoComplete}
+        textContentType={textContentType}
+        maxLength={maxLength}
+        autoFocus={autoFocus}
+        returnKeyType={returnKeyType}
+        onSubmitEditing={onSubmitEditing}
       />
-      {secure && onTogglePassword && (
-        <TouchableOpacity onPress={onTogglePassword} style={styles.eyeIcon}>
+      {secure && onTogglePassword ? (
+        <TouchableOpacity
+          onPress={onTogglePassword}
+          style={styles.eye}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
           <Ionicons
             name={showPassword ? "eye-off-outline" : "eye-outline"}
-            size={20}
-            color="#888"
+            size={22}
+            color={MUTED}
           />
         </TouchableOpacity>
-      )}
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
+  root: {
+    flex: 1,
+    backgroundColor: CREAM,
+  },
+  flex: { flex: 1 },
   loading: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#fff",
+    backgroundColor: CREAM,
   },
-  scroll: { flexGrow: 1, paddingHorizontal: 24, paddingVertical: 48 },
-  header: { alignItems: "center", marginBottom: 24 },
-  title: { fontSize: 28, fontWeight: "800", color: "#111", marginBottom: 8, textAlign: "center" },
-  subtitle: { fontSize: 15, color: "#888", textAlign: "center", lineHeight: 22 },
-  viewTitle: { fontSize: 22, fontWeight: "800", color: "#111", marginBottom: 8, textAlign: "center" },
-  viewDesc: { fontSize: 14, color: "#888", textAlign: "center", marginBottom: 24, lineHeight: 20 },
-  emailHighlight: { color: theme.primary, fontWeight: "700" },
-  toggleRow: { flexDirection: "row", backgroundColor: "#f5f5f5", borderRadius: 12, padding: 4, marginBottom: 24 },
-  toggleBtn: { flex: 1, paddingVertical: 12, alignItems: "center", borderRadius: 10 },
-  toggleBtnActive: { backgroundColor: "#fff", shadowColor: "#000", shadowOpacity: 0.08, shadowRadius: 4, elevation: 2 },
-  toggleText: { fontSize: 15, fontWeight: "600", color: "#888" },
-  toggleTextActive: { color: theme.primary },
-  fieldGroup: { marginBottom: 16 },
-  label: { fontSize: 14, fontWeight: "600", color: "#111", marginBottom: 8 },
-  hint: { fontSize: 12, color: "#888", marginTop: 6 },
-  inputWrapper: {
-    flexDirection: "row",
+
+  nav: {
+    height: 52,
+    justifyContent: "center",
+    paddingHorizontal: 8,
+  },
+  navBack: {
+    width: 44,
+    height: 44,
     alignItems: "center",
-    backgroundColor: "#f5f5f5",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#e0e0e0",
-    paddingHorizontal: 12,
+    justifyContent: "center",
   },
-  inputIcon: { marginRight: 8 },
-  input: { flex: 1, paddingVertical: 14, fontSize: 15, color: "#111" },
-  codeInput: {
-    backgroundColor: "#f5f5f5",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#e0e0e0",
-    paddingVertical: 16,
-    fontSize: 28,
+
+  scroll: {
+    paddingHorizontal: 24,
+    paddingTop: 8,
+    paddingBottom: 24,
+  },
+
+  headline: {
+    fontSize: 32,
+    fontWeight: "800",
+    color: GREEN,
+    letterSpacing: -0.6,
+    lineHeight: 38,
+    marginBottom: 10,
+  },
+  helper: {
+    fontSize: 16,
+    lineHeight: 22,
+    color: MUTED,
+    marginBottom: 28,
+  },
+  emphasis: {
+    color: GREEN,
+    fontWeight: "700",
+  },
+
+  inputWrap: {
+    borderBottomWidth: 2,
+    borderBottomColor: LINE,
+    marginBottom: 22,
+    minHeight: 48,
+    justifyContent: "center",
+  },
+  inputWrapFocused: {
+    borderBottomColor: GREEN,
+  },
+  input: {
+    fontSize: 18,
+    color: GREEN,
+    paddingVertical: Platform.OS === "ios" ? 12 : 10,
+    paddingHorizontal: 0,
+  },
+  inputCenter: {
     textAlign: "center",
     letterSpacing: 8,
     fontWeight: "700",
-    color: "#111",
+    fontSize: 26,
   },
-  eyeIcon: { position: "absolute", right: 12 },
-  forgotLink: { color: theme.primary, fontSize: 14, fontWeight: "600", marginBottom: 16, textAlign: "right" },
-  termsRow: { flexDirection: "row", alignItems: "flex-start", gap: 10, marginBottom: 16 },
-  termsText: { flex: 1, fontSize: 13, color: "#555", lineHeight: 20 },
-  termsLink: { color: theme.primary, fontWeight: "700", textDecorationLine: "underline" },
-  primaryButton: {
-    backgroundColor: theme.primary,
-    borderRadius: 12,
-    paddingVertical: 16,
-    alignItems: "center",
+  eye: {
+    position: "absolute",
+    right: 0,
+    top: 0,
+    bottom: 0,
+    justifyContent: "center",
+  },
+
+  hint: {
+    fontSize: 13,
+    color: MUTED,
+    marginTop: -14,
+    marginBottom: 18,
+  },
+  forgotHit: {
+    alignSelf: "flex-start",
+    marginTop: -8,
+  },
+  forgotText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: GREEN,
+    marginTop: 4,
+  },
+  mutedLink: {
+    marginTop: 18,
+    fontSize: 14,
+    color: MUTED,
+    textAlign: "center",
+  },
+
+  switchHit: {
     marginTop: 8,
   },
-  primaryButtonText: { color: "#fff", fontSize: 17, fontWeight: "700" },
-  disabled: { opacity: 0.6 },
-  divider: { flexDirection: "row", alignItems: "center", marginVertical: 24, gap: 8 },
-  dividerLine: { flex: 1, height: 1, backgroundColor: "#e0e0e0" },
-  dividerText: { fontSize: 11, color: "#888", fontWeight: "500" },
-  section: { marginTop: 24, paddingTop: 24, borderTopWidth: 1, borderTopColor: "#e0e0e0", gap: 12 },
-  mutedText: { fontSize: 13, color: "#888", textAlign: "center" },
-  secondaryButton: {
-    paddingVertical: 14,
-    borderRadius: 12,
-    backgroundColor: "#f5f5f5",
-    borderWidth: 1,
-    borderColor: "#e0e0e0",
-    alignItems: "center",
+  switchText: {
+    fontSize: 15,
+    color: MUTED,
   },
-  secondaryButtonText: { fontSize: 15, fontWeight: "600", color: "#111" },
-  linkBtn: { marginTop: 16, alignItems: "center" },
-  linkText: { color: theme.primary, fontSize: 14, fontWeight: "600" },
-  mutedLink: { color: "#888", fontSize: 13, textAlign: "center" },
+  switchLink: {
+    color: GREEN,
+    fontWeight: "700",
+  },
+
+  termsRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    marginTop: 4,
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: LINE,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 1,
+  },
+  checkboxOn: {
+    backgroundColor: GREEN,
+    borderColor: GREEN,
+  },
+  termsText: {
+    flex: 1,
+    fontSize: 14,
+    color: MUTED,
+    lineHeight: 20,
+  },
+  termsLink: {
+    color: GREEN,
+    fontWeight: "700",
+    textDecorationLine: "underline",
+  },
+
+  footer: {
+    paddingHorizontal: 24,
+    paddingTop: 8,
+    backgroundColor: CREAM,
+  },
+  pill: {
+    backgroundColor: GREEN,
+    borderRadius: 28,
+    height: 56,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pillDisabled: { opacity: 0.5 },
+  pillText: {
+    color: "#fff",
+    fontSize: 17,
+    fontWeight: "700",
+  },
 });

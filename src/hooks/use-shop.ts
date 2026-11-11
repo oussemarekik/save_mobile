@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, type MutateOptions } from "@tanstack/react-query";
 import {
   offersApi,
   ordersApi,
@@ -45,15 +45,16 @@ export function useStore(id: number) {
 // ─── Products ─────────────────────────────────────────────────────────────────
 
 export function useProducts() {
-  const { data: offers, isLoading, isError } = useQuery({
+  const { data: offers, isLoading, isError, refetch } = useQuery({
     queryKey: ["/offers"],
     queryFn: () => offersApi.getAll(),
     retry: 1,
+    refetchOnWindowFocus: true,
   });
 
   const products = offers ? offers.map(transformOfferToProduct) : [];
 
-  return { data: products, isLoading, isError };
+  return { data: products, isLoading, isError, refetch };
 }
 
 export function useProduct(id: number) {
@@ -70,17 +71,34 @@ export function useProduct(id: number) {
 
 // ─── Orders ───────────────────────────────────────────────────────────────────
 
+function orderAwaitingPickup(order: any): boolean {
+  if (!order) return false;
+  // Pending = reserved, waiting for QR scan. Confirmed without collectedAt = same.
+  return (
+    order.status === "pending" ||
+    (order.status === "confirmed" && !order.collectedAt)
+  );
+}
+
 export function useOrders() {
-  const { data: orders, isLoading, isError } = useQuery({
+  const { data: orders, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ["/orders"],
     queryFn: async () => {
       const backendOrders = await ordersApi.getAll();
       return backendOrders?.map(transformOrder).filter(Boolean) || [];
     },
     retry: 1,
+    // Keep Orders in sync when a provider scans the pickup QR (web or mobile).
+    // Poll only while something is still awaiting collection.
+    refetchInterval: (query) => {
+      const list = query.state.data as any[] | undefined;
+      if (!list?.some(orderAwaitingPickup)) return false;
+      return 3000;
+    },
+    refetchOnWindowFocus: true,
   });
 
-  return { data: orders || [], isLoading, isError };
+  return { data: orders || [], isLoading, isError, refetch, isFetching };
 }
 
 export function useCreateOrder() {
@@ -93,9 +111,10 @@ export function useCreateOrder() {
         quantity: data.quantity,
       });
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/orders"] });
       queryClient.invalidateQueries({ queryKey: ["/offers"] });
+      queryClient.invalidateQueries({ queryKey: [`/offers/${variables.productId}`] });
     },
   });
 
@@ -124,34 +143,34 @@ export function useFavorites() {
   return { data: data ?? [], isLoading: isAuthenticated ? isLoading : false, isError };
 }
 
+type ToggleFavoriteVariables = { providerId: number; favorite: boolean };
+type ToggleFavoriteOptions = MutateOptions<
+  boolean,
+  Error,
+  ToggleFavoriteVariables,
+  { previous: number[] }
+>;
+
 export function useToggleFavorite() {
   const queryClient = useQueryClient();
 
   const mutation = useMutation({
-    mutationFn: async (providerId: number) => {
-      const current =
-        (queryClient.getQueryData<number[]>(FAVORITES_QUERY_KEY) as number[] | undefined) || [];
-      const isFavorited = current.includes(providerId);
-
-      if (isFavorited) {
+    mutationFn: async ({ providerId, favorite }: ToggleFavoriteVariables) => {
+      if (favorite) {
+        await favoritesApi.add(providerId);
+      } else {
         await favoritesApi.remove(providerId);
-        return current.filter((id) => id !== providerId);
       }
-
-      await favoritesApi.add(providerId);
-      return [...current, providerId];
+      return favorite;
     },
-    onMutate: async (providerId) => {
+    onMutate: async ({ providerId, favorite }) => {
       await queryClient.cancelQueries({ queryKey: FAVORITES_QUERY_KEY });
       const previous = queryClient.getQueryData<number[]>(FAVORITES_QUERY_KEY) || [];
-      const isFavorited = previous.includes(providerId);
-      queryClient.setQueryData(
-        FAVORITES_QUERY_KEY,
-        isFavorited ? previous.filter((id) => id !== providerId) : [...previous, providerId]
-      );
+      const others = previous.filter((id) => id !== providerId);
+      queryClient.setQueryData(FAVORITES_QUERY_KEY, favorite ? [...others, providerId] : others);
       return { previous };
     },
-    onError: (_err, _providerId, context) => {
+    onError: (_err, _variables, context) => {
       if (context?.previous) {
         queryClient.setQueryData(FAVORITES_QUERY_KEY, context.previous);
       }
@@ -161,9 +180,18 @@ export function useToggleFavorite() {
     },
   });
 
+  // Decide add vs. remove at tap time: onMutate updates the cached list before
+  // mutationFn runs, so reading the cache there gives the opposite answer.
+  const nextState = (providerId: number): ToggleFavoriteVariables => {
+    const current = queryClient.getQueryData<number[]>(FAVORITES_QUERY_KEY) || [];
+    return { providerId, favorite: !current.includes(providerId) };
+  };
+
   return {
-    mutate: mutation.mutate,
-    mutateAsync: mutation.mutateAsync,
+    mutate: (providerId: number, options?: ToggleFavoriteOptions) =>
+      mutation.mutate(nextState(providerId), options),
+    mutateAsync: (providerId: number, options?: ToggleFavoriteOptions) =>
+      mutation.mutateAsync(nextState(providerId), options),
     isPending: mutation.isPending,
     isError: mutation.isError,
   };

@@ -16,8 +16,12 @@ function toRadians(degrees: number): number {
   return degrees * (Math.PI / 180);
 }
 
-export function formatDistance(distance: number, format: "compact" | "descriptive" = "compact"): string {
+export function formatDistance(
+  distance: number,
+  format: "compact" | "descriptive" = "compact",
+  awayLabel = "away"
+): string {
   if (distance === Infinity || isNaN(distance)) return "—";
-  let result = distance < 1 ? `${Math.round(distance * 1000)} m` : `${distance.toFixed(1)} km`;
-  return format === "descriptive" ? `${result} away` : result;
+  const result = distance < 1 ? `${Math.round(distance * 1000)} m` : `${distance.toFixed(1)} km`;
+  return format === "descriptive" ? `${result} ${awayLabel}` : result;
 }

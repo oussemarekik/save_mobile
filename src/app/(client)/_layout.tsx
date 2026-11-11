@@ -1,13 +1,16 @@
 import { Tabs, Redirect } from "expo-router";
-import { View, ActivityIndicator } from "react-native";
+import { View, ActivityIndicator, Platform } from "react-native";
 import { useAuth } from "@/hooks/use-auth";
 import { useLanguage } from "@/context/LanguageContext";
 import { Ionicons } from "@expo/vector-icons";
 import { theme } from "@/lib/theme";
+import { useSystemBottomInset } from "@/lib/screen-insets";
 
 export default function ClientLayout() {
   const { isAuthenticated, user, isLoading } = useAuth();
   const { t } = useLanguage();
+  const systemBottom = useSystemBottomInset();
+  const tabBarPaddingBottom = Platform.OS === "android" ? systemBottom : Math.max(systemBottom, 0);
 
   if (isLoading) {
     return (
@@ -18,8 +21,14 @@ export default function ClientLayout() {
   }
 
   if (!isAuthenticated) return <Redirect href="/(auth)/signin" />;
-  if (user?.role === "PROVIDER" || user?.role === "PENDING_PROVIDER") {
+  if (!user?.role || user.role === "NONE") {
+    return <Redirect href="/(auth)/signin" />;
+  }
+  if (user.role === "PROVIDER" || user.role === "PENDING_PROVIDER") {
     return <Redirect href="/(provider)/dashboard" />;
+  }
+  if (user.role !== "CLIENT") {
+    return <Redirect href="/(auth)/signin" />;
   }
 
   return (
@@ -28,9 +37,14 @@ export default function ClientLayout() {
         headerShown: false,
         tabBarActiveTintColor: theme.primary,
         tabBarInactiveTintColor: theme.muted,
-        tabBarStyle: { borderTopColor: theme.border, backgroundColor: "#fff" },
-      }}
-    >
+          tabBarStyle: {
+            borderTopColor: theme.border,
+            backgroundColor: "#fff",
+            paddingBottom: tabBarPaddingBottom,
+            height: 56 + tabBarPaddingBottom,
+          },
+        }}
+      >
       <Tabs.Screen
         name="Home"
         options={{

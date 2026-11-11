@@ -1,27 +1,27 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
   StyleSheet, ActivityIndicator, Modal, Image,
-  KeyboardAvoidingView, Platform,
+  KeyboardAvoidingView, Platform, Pressable, Dimensions,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { offersApi, ordersApi, storageApi, usersApi, transformOfferToProduct, transformOrder } from "@/lib/api-client";
-import { invalidateOfferQueries, providerOffersKey } from "@/lib/offer-queries";
-import { useDeleteOffer } from "@/hooks/use-delete-offer";
-import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
+import { offersApi, ordersApi, usersApi, transformOrder } from "@/lib/api-client";
+import { providerOffersKey } from "@/lib/offer-queries";
 import { Ionicons } from "@expo/vector-icons";
 import Toast from "react-native-toast-message";
-import { pickImageFromLibrary } from "@/lib/pick-image";
-import { formatPrice, formatPriceValue } from "@/utils/formatPrice";
+import { formatPrice } from "@/utils/formatPrice";
 import { useLanguage } from "@/context/LanguageContext";
 import { ProviderPendingBanner } from "@/components/provider/ProviderPendingBanner";
 import { ProviderQRScannerModal } from "@/components/provider/ProviderQRScannerModal";
+import { ProviderOffersSection } from "@/components/provider/ProviderOffersSection";
 import { LocationAutocomplete, generateMapsLink, type SelectedPlace } from "@/components/LocationAutocomplete";
-import { filterOffers, getOfferStats, type OfferFilter } from "@/utils/offerUtils";
+import { getOfferStats } from "@/utils/offerUtils";
+import { useHeaderTopPadding, useTabScreenContentInsets } from "@/lib/screen-insets";
+import { theme } from "@/lib/theme";
 
-const PRIMARY = "#16a34a";
 type Tab = "overview" | "orders" | "offers";
 
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
@@ -30,14 +30,25 @@ export default function ProviderDashboard() {
   const { user, isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
   const { t } = useLanguage();
-  const [showCreateForm, setShowCreateForm] = useState(false);
-  const [editingOffer, setEditingOffer] = useState<any>(null);
+  const headerTop = useHeaderTopPadding();
+  const contentInsets = useTabScreenContentInsets();
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [showQRScanner, setShowQRScanner] = useState(false);
   const [showProfileEdit, setShowProfileEdit] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
-  const [offerSearch, setOfferSearch] = useState("");
-  const [offerFilter, setOfferFilter] = useState<OfferFilter>("all");
+  const params = useLocalSearchParams<{ tab?: string | string[] }>();
+
+  // Other screens can open a given tab, e.g. the offers list after publishing
+  useEffect(() => {
+    const requested = Array.isArray(params.tab) ? params.tab[0] : params.tab;
+    if (requested === "overview" || requested === "orders" || requested === "offers") {
+      setActiveTab(requested);
+      // Emptied (not removed) so asking for the same tab again later is seen as a change
+      router.setParams({ tab: "" });
+    }
+  }, [params.tab, router]);
+
+  const openCreateOffer = () => router.push("/new-offer" as any);
 
   const { data: offers, isLoading } = useQuery({
     queryKey: providerOffersKey(user?.id),
@@ -54,48 +65,39 @@ export default function ProviderDashboard() {
     enabled: isAuthenticated,
   });
 
-  const deleteOfferMutation = useDeleteOffer();
-  const { confirm, dialog: confirmDialog } = useConfirmDialog();
-
-  const promptDeleteOffer = (id: number) => {
-    confirm({
-      title: t("offer_card.confirm_deletion") || "Delete offer?",
-      message:
-        t("offer_card.delete_message") ||
-        "Are you sure you want to delete this offer? This action cannot be undone.",
-      confirmLabel: t("common.delete") || "Delete",
-      cancelLabel: t("common.cancel") || "Cancel",
-      destructive: true,
-      onConfirm: async () => {
-        try {
-          await deleteOfferMutation.mutateAsync(Number(id));
-          Toast.show({
-            type: "success",
-            text1: t("provider.home.offer_deleted"),
-            text2: t("provider.dashboard.offer_deleted_desc"),
-          });
-        } catch (error: any) {
-          Toast.show({
-            type: "error",
-            text1: t("provider.dashboard.delete_failed_title"),
-            text2: error.message || t("provider.dashboard.delete_failed_desc"),
-          });
-          throw error;
-        }
-      },
-    });
-  };
-
-  const confirmOrderMutation = useMutation({
-    mutationFn: (id: number) => ordersApi.confirm(id),
-    onSuccess: () => {
+  const scanOrderMutation = useMutation({
+    mutationFn: (token: string) => ordersApi.scan(token),
+    onSuccess: (result: any) => {
+      const scanned = result?.order;
+      if (scanned?.id) {
+        queryClient.setQueryData<any[]>(["/orders/provider"], (current) =>
+          (current || []).map((order) =>
+            order.id === scanned.id
+              ? {
+                  ...order,
+                  status: scanned.status || "confirmed",
+                  collectedAt: scanned.collectedAt || new Date().toISOString(),
+                }
+              : order
+          )
+        );
+      }
+      queryClient.invalidateQueries({ queryKey: ["/orders/provider"] });
       queryClient.invalidateQueries({ queryKey: ["/orders"] });
       Toast.show({
         type: "success",
-        text1: t("orders.confirmed"),
-        text2: t("provider.dashboard.order_confirmed_desc"),
+        text1: t("provider.dashboard.order_found"),
+        text2: t("provider.dashboard.order_found_desc"),
       });
+      setShowQRScanner(false);
       setSelectedOrder(null);
+    },
+    onError: (error: any) => {
+      Toast.show({
+        type: "error",
+        text1: t("common.error"),
+        text2: error.message || t("qr_scanner.invalid_qr"),
+      });
     },
   });
 
@@ -119,7 +121,7 @@ export default function ProviderDashboard() {
   if (user?.role !== "PROVIDER" && user?.role !== "PENDING_PROVIDER") {
     return (
       <View style={styles.centered}>
-        <Ionicons name="cube-outline" size={64} color="#888" />
+        <Ionicons name="cube-outline" size={64} color={theme.muted} />
         <Text style={styles.centeredTitle}>{t("auth.providerRequired")}</Text>
         <Text style={styles.centeredSubtitle}>{t("auth.providerRequiredDesc")}</Text>
         <TouchableOpacity style={styles.primaryButton} onPress={() => router.push("/(auth)/ProviderSignup")}>
@@ -129,7 +131,9 @@ export default function ProviderDashboard() {
     );
   }
 
-  const activeOrders = orders?.filter((o: any) => o.status === "pending" || o.status === "confirmed") || [];
+  const activeOrders = orders?.filter((o: any) =>
+    (o.status === "pending" || o.status === "confirmed") && !o.collectedAt
+  ) || [];
   const pastOrders = orders?.filter((o: any) =>
     (o.status === "confirmed" && o.collectedAt) || o.status === "cancelled" || o.status === "expired"
   ) || [];
@@ -138,14 +142,13 @@ export default function ProviderDashboard() {
   const completedOrders = pastOrders.length;
   const isPendingProvider = user?.role === "PENDING_PROVIDER";
   const offerStats = getOfferStats(offers || []);
-  const displayedOffers = filterOffers(offers || [], offerSearch, offerFilter);
 
   return (
     <View style={styles.container}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: headerTop }]}>
         <Text style={styles.headerTitle}>{t("provider.dashboard.title")}</Text>
-        <TouchableOpacity style={styles.addButton} onPress={() => setShowCreateForm(true)}>
+        <TouchableOpacity style={styles.addButton} onPress={openCreateOffer}>
           <Ionicons name="add" size={24} color="#fff" />
         </TouchableOpacity>
       </View>
@@ -165,7 +168,10 @@ export default function ProviderDashboard() {
         ))}
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={[styles.scrollContent, contentInsets]}
+        showsVerticalScrollIndicator={false}
+      >
 
         {/* ── Overview Tab ── */}
         {activeTab === "overview" && (
@@ -174,10 +180,10 @@ export default function ProviderDashboard() {
             {/* Stats Grid */}
             <View style={styles.statsGrid}>
               {[
-                { icon: "cube-outline", color: PRIMARY, value: offers?.length || 0, label: t("provider.dashboard.active_offers") },
-                { icon: "time-outline", color: "#ea580c", value: activeOrders.length, label: t("provider.dashboard.pending_orders") },
-                { icon: "cash-outline", color: "#16a34a", value: `${formatPriceValue(totalRevenue)} dt`, label: t("provider.dashboard.total_revenue") },
-                { icon: "trending-up-outline", color: "#2563eb", value: completedOrders, label: t("provider.dashboard.completed_orders") },
+                { icon: "cube-outline", color: theme.primaryDark, value: offerStats.active, label: t("provider.dashboard.active_offers") },
+                { icon: "time-outline", color: theme.amber, value: activeOrders.length, label: t("provider.dashboard.pending_orders") },
+                { icon: "cash-outline", color: theme.primary, value: formatPrice(totalRevenue), label: t("provider.dashboard.total_revenue") },
+                { icon: "trending-up-outline", color: theme.blue, value: completedOrders, label: t("provider.dashboard.completed_orders") },
               ].map((stat) => (
                 <View key={stat.label} style={styles.statCard}>
                   <View style={styles.statRow}>
@@ -193,12 +199,12 @@ export default function ProviderDashboard() {
             <Text style={styles.sectionTitle}>{t("provider.dashboard.quick_actions")}</Text>
             <View style={styles.statsGrid}>
               {[
-                { icon: "add-circle-outline", label: t("provider.home.publish_offer"), sub: t("provider.dashboard.publish_offer_sub"), onPress: () => setShowCreateForm(true) },
+                { icon: "add-circle-outline", label: t("provider.home.publish_offer"), sub: t("provider.dashboard.publish_offer_sub"), onPress: openCreateOffer },
                 { icon: "qr-code-outline", label: t("provider.scan_qr"), sub: t("provider.dashboard.scan_qr_sub"), onPress: () => setShowQRScanner(true) },
                 { icon: "settings-outline", label: t("provider.profile.edit_profile"), sub: t("provider.dashboard.edit_profile_sub"), onPress: () => setShowProfileEdit(true) },
               ].map((a) => (
                 <TouchableOpacity key={a.label} style={styles.actionCard} onPress={a.onPress} activeOpacity={0.8}>
-                  <Ionicons name={a.icon as any} size={24} color={PRIMARY} />
+                  <Ionicons name={a.icon as any} size={24} color={theme.primaryDark} />
                   <Text style={styles.actionLabel}>{a.label}</Text>
                   <Text style={styles.actionSub}>{a.sub}</Text>
                 </TouchableOpacity>
@@ -209,7 +215,7 @@ export default function ProviderDashboard() {
             {activeOrders.length > 0 && (
               <>
                 <View style={styles.sectionRow}>
-                  <Ionicons name="time-outline" size={18} color="#ea580c" />
+                  <Ionicons name="time-outline" size={18} color={theme.amber} />
                   <Text style={styles.sectionTitle}>{t("provider.dashboard.recent_pending_orders")}</Text>
                 </View>
                 {activeOrders.slice(0, 3).map((order: any) => (
@@ -217,7 +223,7 @@ export default function ProviderDashboard() {
                     key={order.id}
                     order={order}
                     onPress={() => setSelectedOrder(order)}
-                    onConfirm={() => confirmOrderMutation.mutate(order.id)}
+                    onScan={() => setShowQRScanner(true)}
                   />
                 ))}
                 {activeOrders.length > 3 && (
@@ -236,7 +242,7 @@ export default function ProviderDashboard() {
             {activeOrders.length > 0 && (
               <>
                 <View style={styles.sectionRow}>
-                  <Ionicons name="time-outline" size={18} color="#ea580c" />
+                  <Ionicons name="time-outline" size={18} color={theme.amber} />
                   <Text style={styles.sectionTitle}>{t("provider.dashboard.pending_pickups", { count: activeOrders.length })}</Text>
                 </View>
                 {activeOrders.map((order: any) => (
@@ -244,7 +250,7 @@ export default function ProviderDashboard() {
                     key={order.id}
                     order={order}
                     onPress={() => setSelectedOrder(order)}
-                    onConfirm={() => confirmOrderMutation.mutate(order.id)}
+                    onScan={() => setShowQRScanner(true)}
                   />
                 ))}
               </>
@@ -253,7 +259,7 @@ export default function ProviderDashboard() {
             {pastOrders.length > 0 && (
               <>
                 <View style={styles.sectionRow}>
-                  <Ionicons name="checkmark-circle-outline" size={18} color="#16a34a" />
+                  <Ionicons name="checkmark-circle-outline" size={18} color={theme.primaryDark} />
                   <Text style={styles.sectionTitle}>{t("provider.dashboard.completed_orders_title", { count: pastOrders.length })}</Text>
                 </View>
                 {pastOrders.map((order: any) => (
@@ -280,7 +286,7 @@ export default function ProviderDashboard() {
 
             {activeOrders.length === 0 && pastOrders.length === 0 && (
               <View style={styles.emptyBox}>
-                <Ionicons name="bag-outline" size={48} color="#888" />
+                <Ionicons name="bag-outline" size={48} color={theme.muted} />
                 <Text style={styles.emptyText}>{t("provider.dashboard.no_orders")}</Text>
               </View>
             )}
@@ -288,136 +294,32 @@ export default function ProviderDashboard() {
         )}
 
         {/* ── Offers Tab ── */}
-        {activeTab === "offers" && (
-          <>
-            <TextInput
-              style={styles.searchInput}
-              value={offerSearch}
-              onChangeText={setOfferSearch}
-              placeholder={t("provider.home.search_placeholder") || "Search offers..."}
-              placeholderTextColor="#888"
-            />
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }}>
-              {(
-                [
-                  { key: "all" as OfferFilter, label: `${t("provider.home.filter_all")} (${offerStats.total})` },
-                  { key: "active" as OfferFilter, label: `${t("provider.home.filter_active")} (${offerStats.active})` },
-                  { key: "expired" as OfferFilter, label: `${t("provider.home.filter_expired")} (${offerStats.expired})` },
-                  { key: "low_stock" as OfferFilter, label: `${t("provider.home.filter_low_stock")} (${offerStats.lowStock})` },
-                ]
-              ).map((f) => (
-                <TouchableOpacity
-                  key={f.key}
-                  onPress={() => setOfferFilter(f.key)}
-                  style={[styles.filterChip, offerFilter === f.key && styles.filterChipActive]}
-                >
-                  <Text style={[styles.filterChipText, offerFilter === f.key && styles.filterChipTextActive]}>{f.label}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-            <View style={styles.sectionRow}>
-              <Ionicons name="cube-outline" size={18} color={PRIMARY} />
-              <Text style={styles.sectionTitle}>{t("provider.dashboard.my_offers", { count: offers?.length || 0 })}</Text>
-              <TouchableOpacity style={styles.smallPrimaryButton} onPress={() => setShowCreateForm(true)}>
-                <Ionicons name="add" size={16} color="#fff" />
-                <Text style={styles.smallPrimaryButtonText}>{t("provider.dashboard.publish")}</Text>
-              </TouchableOpacity>
-            </View>
-
-            {isLoading ? (
-              [1, 2, 3].map((i) => <View key={i} style={styles.skeleton} />)
-            ) : displayedOffers.length > 0 ? (
-              displayedOffers.map((offer: any) => {
-                const product = transformOfferToProduct(offer);
-                return (
-                  <View key={offer.id} style={styles.offerCard}>
-                    <View style={styles.offerCardTop}>
-                      {product.imageUrl ? (
-                        <Image source={{ uri: product.imageUrl }} style={styles.offerImage} />
-                      ) : (
-                        <View style={[styles.offerImage, styles.offerImagePlaceholder]}>
-                          <Ionicons name="image-outline" size={24} color="#888" />
-                        </View>
-                      )}
-                      <View style={styles.offerInfo}>
-                        <Text style={styles.offerTitle}>{product.name}</Text>
-                        <Text style={styles.offerSub}>{product.quantity} available</Text>
-                        <Text style={styles.offerPrice}>{formatPrice(product.price)}</Text>
-                      </View>
-                    </View>
-                    <View style={styles.offerCardBottom}>
-                      <Text style={styles.offerPickup}>
-                        Pickup: {product.pickupStart} - {product.pickupEnd}
-                      </Text>
-                      <View style={styles.offerActions}>
-                        <TouchableOpacity onPress={() => setEditingOffer(offer)} style={styles.iconButton}>
-                          <Ionicons name="create-outline" size={18} color="#555" />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          onPress={() => promptDeleteOffer(offer.id)}
-                          style={styles.iconButton}
-                        >
-                          <Ionicons name="trash-outline" size={18} color="#ef4444" />
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  </View>
-                );
-              })
-            ) : offers && offers.length > 0 ? (
-              <View style={styles.emptyBox}>
-                <Text style={styles.emptyText}>{t("provider.home.no_results") || "No offers match your filters"}</Text>
-              </View>
-            ) : (
-              <View style={styles.emptyBox}>
-                <Ionicons name="cube-outline" size={48} color="#888" />
-                <Text style={styles.emptyText}>No offers yet</Text>
-                <TouchableOpacity style={styles.primaryButton} onPress={() => setShowCreateForm(true)}>
-                  <Ionicons name="add" size={18} color="#fff" />
-                  <Text style={styles.primaryButtonText}>Publish Your First Offer</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </>
-        )}
+        {activeTab === "offers" && <ProviderOffersSection offers={offers} isLoading={isLoading} />}
       </ScrollView>
 
       {/* Modals */}
-      {showCreateForm && (
-        <CreateOfferModal
-          onClose={() => setShowCreateForm(false)}
-          onSuccess={() => { setShowCreateForm(false); invalidateOfferQueries(queryClient); }}
-        />
-      )}
-      {editingOffer && (
-        <EditOfferModal
-          offer={editingOffer}
-          onClose={() => setEditingOffer(null)}
-          onSuccess={() => { setEditingOffer(null); invalidateOfferQueries(queryClient); }}
-        />
-      )}
       {selectedOrder && (
         <OrderDetailsModal
           order={selectedOrder}
           onClose={() => setSelectedOrder(null)}
-          onConfirm={(id) => confirmOrderMutation.mutate(id)}
-        />
-      )}
-      {showQRScanner && (
-        <ProviderQRScannerModal
-          visible={showQRScanner}
-          onClose={() => setShowQRScanner(false)}
-          onScan={(token) => {
-            ordersApi.scan(token)
-              .then(() => {
-                queryClient.invalidateQueries({ queryKey: ["/orders"] });
-                Toast.show({ type: "success", text1: t("provider.dashboard.order_found") });
-                setShowQRScanner(false);
-              })
-              .catch((err) => Toast.show({ type: "error", text1: t("common.error"), text2: err.message }));
+          onScan={() => {
+            setSelectedOrder(null);
+            setShowQRScanner(true);
           }}
         />
       )}
+      <ProviderQRScannerModal
+        visible={showQRScanner}
+        onClose={() => setShowQRScanner(false)}
+        onScan={async (token) => {
+          try {
+            await scanOrderMutation.mutateAsync(token);
+            return true;
+          } catch {
+            return false;
+          }
+        }}
+      />
       {showProfileEdit && (
         <ProfileEditModal
           user={user}
@@ -425,13 +327,12 @@ export default function ProviderDashboard() {
           onSuccess={() => { setShowProfileEdit(false); queryClient.invalidateQueries({ queryKey: ["/auth/get-user-by-token"] }); }}
         />
       )}
-      {confirmDialog}
     </View>
   );
 }
 
 // ─── Order Card ────────────────────────────────────────────────────────────────
-function OrderCard({ order, onPress, onConfirm }: { order: any; onPress: () => void; onConfirm: () => void }) {
+function OrderCard({ order, onPress, onScan }: { order: any; onPress: () => void; onScan: () => void }) {
   const { t } = useLanguage();
   return (
     <TouchableOpacity style={styles.orderCard} onPress={onPress} activeOpacity={0.8}>
@@ -440,74 +341,34 @@ function OrderCard({ order, onPress, onConfirm }: { order: any; onPress: () => v
           <Text style={styles.orderTitle}>{order.product?.name || order.offer?.title || t("provider.dashboard.order_default")}</Text>
           <Text style={styles.orderSub}>{t("provider.dashboard.pickup_code")}: <Text style={styles.mono}>{order.pickupCode || order.id}</Text></Text>
         </View>
-        <Text style={styles.orderPrice}>${((order.totalPrice || 0) / 100).toFixed(2)}</Text>
+        <Text style={styles.orderPrice}>{formatPrice(order.totalPrice || 0)}</Text>
       </View>
       <View style={styles.orderCardButtons}>
-        <TouchableOpacity style={styles.confirmButton} onPress={onConfirm} activeOpacity={0.8}>
-          <Text style={styles.confirmButtonText}>{t("provider.dashboard.confirm_pickup")}</Text>
+        <TouchableOpacity style={styles.confirmButton} onPress={onScan} activeOpacity={0.8}>
+          <Text style={styles.confirmButtonText}>{t("provider.scan_qr") || "Scan QR"}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.viewButton} onPress={onPress} activeOpacity={0.8}>
-          <Ionicons name="eye-outline" size={18} color="#555" />
+          <Ionicons name="eye-outline" size={18} color={theme.foreground} />
         </TouchableOpacity>
       </View>
     </TouchableOpacity>
   );
 }
 
-// ─── Shared form helpers ───────────────────────────────────────────────────────
-function getFoodTypes(t: (key: string) => string) {
-  return [
-    { label: t("offer_card.food_type_meal"), value: "meal" },
-    { label: t("offer_card.food_type_snack"), value: "snack" },
-    { label: t("offer_card.food_type_beverage"), value: "beverage" },
-    { label: t("offer_card.food_type_other"), value: "other" },
-  ];
-}
-function getTastes(t: (key: string) => string) {
-  return [
-    { label: t("offer_card.taste_neutral"), value: "neutral" },
-    { label: t("offer_card.taste_sweet"), value: "sweet" },
-    { label: t("offer_card.taste_salty"), value: "salty" },
-    { label: t("offer_card.taste_both"), value: "both" },
-  ];
-}
-
-function parseTime(timeStr: string) {
-  const def = { hours: 17, minutes: 0 };
-  if (!timeStr) return def;
-  const parts = timeStr.split(":");
-  if (parts.length !== 2) return def;
-  const h = parseInt(parts[0], 10), m = parseInt(parts[1], 10);
-  if (isNaN(h) || isNaN(m)) return def;
-  return { hours: h, minutes: m };
-}
-
-function timeToISO(timeStr: string) {
-  const { hours, minutes } = parseTime(timeStr);
-  const d = new Date();
-  d.setHours(hours, minutes, 0, 0);
-  return d.toISOString();
-}
-
-function extractTime(dt: string | Date | null | undefined, def = "17:00") {
-  if (!dt) return def;
-  try {
-    const d = typeof dt === "string" ? new Date(dt) : dt;
-    return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
-  } catch { return def; }
-}
-
 // ─── Shared BottomSheet wrapper ────────────────────────────────────────────────
 function BottomSheet({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+  const insets = useSafeAreaInsets();
+  const sheetMaxHeight = Math.round(Dimensions.get("window").height * 0.92);
   return (
-    <Modal visible animationType="slide" transparent onRequestClose={onClose}>
+    <Modal visible animationType="slide" transparent statusBarTranslucent onRequestClose={onClose}>
       <KeyboardAvoidingView
         style={sheet.overlay}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <TouchableOpacity style={sheet.backdrop} onPress={onClose} activeOpacity={1} />
-        <View style={sheet.container}>
+        <Pressable style={sheet.backdrop} onPress={onClose} />
+        <View style={[sheet.container, { maxHeight: sheetMaxHeight, paddingBottom: Math.max(insets.bottom, 12) }]}>
           <ScrollView
+            style={{ maxHeight: sheetMaxHeight - Math.max(insets.bottom, 12) }}
             showsVerticalScrollIndicator
             keyboardShouldPersistTaps="handled"
             nestedScrollEnabled
@@ -521,91 +382,6 @@ function BottomSheet({ children, onClose }: { children: React.ReactNode; onClose
   );
 }
 
-// ─── Shared OfferForm fields ───────────────────────────────────────────────────
-function OfferForm({ formData, setFormData, imageUri, onPickImage }: {
-  formData: any; setFormData: (d: any) => void;
-  imageUri: string | null; onPickImage: () => void;
-}) {
-  const { t } = useLanguage();
-  const foodTypes = getFoodTypes(t);
-  const tastes = getTastes(t);
-  return (
-    <>
-      <Field label={t("offer_card.title_label")}>
-        <TextInput style={styles.input} value={formData.title}
-          onChangeText={(v) => setFormData({ ...formData, title: v })} placeholder={t("offer_card.title_placeholder")} />
-      </Field>
-      <Field label={t("offer_card.description_label")}>
-        <TextInput style={[styles.input, { height: 80, textAlignVertical: "top" }]}
-          value={formData.description} multiline
-          onChangeText={(v) => setFormData({ ...formData, description: v })}
-          placeholder={t("offer_card.description_placeholder")} />
-      </Field>
-      <View style={styles.row}>
-        <View style={{ flex: 1 }}>
-          <Field label={t("offer_card.price_label")}>
-            <TextInput style={styles.input} value={formData.price} keyboardType="decimal-pad"
-              onChangeText={(v) => setFormData({ ...formData, price: v })} placeholder="4.99" />
-          </Field>
-        </View>
-        <View style={{ width: 12 }} />
-        <View style={{ flex: 1 }}>
-          <Field label={t("offer_card.original_price_label")}>
-            <TextInput style={styles.input} value={formData.originalPrice} keyboardType="decimal-pad"
-              onChangeText={(v) => setFormData({ ...formData, originalPrice: v })} placeholder="15.99" />
-          </Field>
-        </View>
-      </View>
-      <Field label={t("offer_card.quantity_label")}>
-        <TextInput style={styles.input} value={String(formData.quantity)} keyboardType="number-pad"
-          onChangeText={(v) => setFormData({ ...formData, quantity: v })} placeholder="10" />
-      </Field>
-      <View style={styles.row}>
-        <View style={{ flex: 1 }}>
-          <Field label={t("add_offer.start_time_label")}>
-            <TextInput style={styles.input} value={formData.pickupStartTime}
-              onChangeText={(v) => setFormData({ ...formData, pickupStartTime: v })} placeholder="17:00" />
-          </Field>
-        </View>
-        <View style={{ width: 12 }} />
-        <View style={{ flex: 1 }}>
-          <Field label={t("add_offer.end_time_label")}>
-            <TextInput style={styles.input} value={formData.pickupEndTime}
-              onChangeText={(v) => setFormData({ ...formData, pickupEndTime: v })} placeholder="18:00" />
-          </Field>
-        </View>
-      </View>
-      <Field label={t("offer_card.food_type")}>
-        <View style={styles.chipRow}>
-          {foodTypes.map((f) => (
-            <TouchableOpacity key={f.value} onPress={() => setFormData({ ...formData, foodType: f.value })}
-              style={[styles.chip, formData.foodType === f.value && styles.chipActive]}>
-              <Text style={[styles.chipText, formData.foodType === f.value && styles.chipTextActive]}>{f.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </Field>
-      <Field label={t("offer_card.taste_label")}>
-        <View style={styles.chipRow}>
-          {tastes.map((taste) => (
-            <TouchableOpacity key={taste.value} onPress={() => setFormData({ ...formData, taste: taste.value })}
-              style={[styles.chip, formData.taste === taste.value && styles.chipActive]}>
-              <Text style={[styles.chipText, formData.taste === taste.value && styles.chipTextActive]}>{taste.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </Field>
-      <Field label={t("offer_card.images_label")}>
-        {imageUri && <Image source={{ uri: imageUri }} style={styles.imagePreview} />}
-        <TouchableOpacity style={styles.imagePicker} onPress={onPickImage}>
-          <Ionicons name="camera-outline" size={20} color="#555" />
-          <Text style={styles.imagePickerText}>{imageUri ? t("common.edit") : t("offer_card.click_upload")}</Text>
-        </TouchableOpacity>
-      </Field>
-    </>
-  );
-}
-
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <View style={{ marginBottom: 16 }}>
@@ -615,136 +391,11 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-// ─── Create Offer Modal ────────────────────────────────────────────────────────
-function CreateOfferModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
-  const { t } = useLanguage();
-  const [isLoading, setIsLoading] = useState(false);
-  const [imageUri, setImageUri] = useState<string | null>(null);
-  const [pickedImage, setPickedImage] = useState<{ uri: string; mimeType?: string; fileName?: string } | null>(null);
-  const [formData, setFormData] = useState({
-    title: "", description: "", price: "", originalPrice: "",
-    quantity: "", pickupStartTime: "17:00", pickupEndTime: "18:00",
-    foodType: "meal", taste: "neutral",
-  });
-
-  const pickImage = async () => {
-    const picked = await pickImageFromLibrary();
-    if (picked) {
-      setImageUri(picked.uri);
-      setPickedImage(picked);
-    }
-  };
-
-  const handleSubmit = async () => {
-    setIsLoading(true);
-    try {
-      let images = "[]";
-      if (pickedImage) {
-        const uploadResult = await storageApi.upload([pickedImage]);
-        if (uploadResult?.length) images = JSON.stringify([uploadResult[0]]);
-      }
-      const data: any = {
-        title: formData.title, description: formData.description,
-        price: parseFloat(formData.price),
-        quantity: parseInt(formData.quantity),
-        expirationDate: new Date(Date.now() + 86400000).toISOString(),
-        pickupStartTime: timeToISO(formData.pickupStartTime),
-        pickupEndTime: timeToISO(formData.pickupEndTime),
-        foodType: formData.foodType, taste: formData.taste, images,
-      };
-      if (formData.originalPrice) data.originalPrice = parseFloat(formData.originalPrice);
-      await offersApi.create(data);
-      Toast.show({
-        type: "success",
-        text1: t("provider.dashboard.offer_published"),
-        text2: t("provider.dashboard.offer_published_desc"),
-      });
-      onSuccess();
-    } catch (e: any) {
-      Toast.show({ type: "error", text1: t("common.error"), text2: e.message || t("provider.dashboard.create_failed") });
-    } finally { setIsLoading(false); }
-  };
-
-  return (
-    <BottomSheet onClose={onClose}>
-      <ModalHeader title={t("provider.dashboard.publish_new_offer")} subtitle={t("provider.dashboard.publish_new_offer_sub")} onClose={onClose} />
-      <OfferForm formData={formData} setFormData={setFormData} imageUri={imageUri} onPickImage={pickImage} />
-      <ModalButtons onCancel={onClose} onSubmit={handleSubmit} isLoading={isLoading}
-        submitLabel={t("provider.home.publish_offer")} loadingLabel={t("provider.dashboard.publishing")} />
-    </BottomSheet>
-  );
-}
-
-// ─── Edit Offer Modal ──────────────────────────────────────────────────────────
-function EditOfferModal({ offer, onClose, onSuccess }: { offer: any; onClose: () => void; onSuccess: () => void }) {
-  const { t } = useLanguage();
-  const product = transformOfferToProduct(offer);
-  const [isLoading, setIsLoading] = useState(false);
-  const [imageUri, setImageUri] = useState<string | null>(product.imageUrl || null);
-  const [newImage, setNewImage] = useState<{ uri: string; mimeType?: string; fileName?: string } | null>(null);
-  const [formData, setFormData] = useState({
-    title: offer.title || product.name || "",
-    description: offer.description || "",
-    price: String(offer.price || product.price || 0),
-    originalPrice: String(offer.originalPrice || 0),
-    quantity: String(offer.quantity || product.quantity || ""),
-    pickupStartTime: extractTime(offer.pickupStartTime),
-    pickupEndTime: extractTime(offer.pickupEndTime, "18:00"),
-    foodType: offer.foodType || "meal",
-    taste: offer.taste || "neutral",
-  });
-
-  const pickImage = async () => {
-    const picked = await pickImageFromLibrary();
-    if (picked) {
-      setImageUri(picked.uri);
-      setNewImage(picked);
-    }
-  };
-
-  const handleSubmit = async () => {
-    setIsLoading(true);
-    try {
-      let images = typeof offer.images === "string" ? offer.images : JSON.stringify(offer.images || []);
-      if (newImage) {
-        const uploadResult = await storageApi.upload([newImage]);
-        if (uploadResult?.length) images = JSON.stringify([uploadResult[0]]);
-      }
-      const data: any = {
-        title: formData.title, description: formData.description,
-        price: parseFloat(formData.price),
-        quantity: parseInt(formData.quantity),
-        pickupStartTime: timeToISO(formData.pickupStartTime),
-        pickupEndTime: timeToISO(formData.pickupEndTime),
-        foodType: formData.foodType, taste: formData.taste, images,
-      };
-      if (formData.originalPrice) data.originalPrice = parseFloat(formData.originalPrice);
-      await offersApi.update(offer.id, data);
-      Toast.show({
-        type: "success",
-        text1: t("offer_card.offer_updated"),
-        text2: t("provider.dashboard.offer_updated_desc"),
-      });
-      onSuccess();
-    } catch (e: any) {
-      Toast.show({ type: "error", text1: t("common.error"), text2: e.message || t("offer_card.update_failed") });
-    } finally { setIsLoading(false); }
-  };
-
-  return (
-    <BottomSheet onClose={onClose}>
-      <ModalHeader title={t("offer_card.edit_offer")} onClose={onClose} />
-      <OfferForm formData={formData} setFormData={setFormData} imageUri={imageUri} onPickImage={pickImage} />
-      <ModalButtons onCancel={onClose} onSubmit={handleSubmit} isLoading={isLoading}
-        submitLabel={t("offer_card.save_changes")} loadingLabel={t("offer_card.saving")} />
-    </BottomSheet>
-  );
-}
-
 // ─── Order Details Modal ───────────────────────────────────────────────────────
-function OrderDetailsModal({ order, onClose, onConfirm }: { order: any; onClose: () => void; onConfirm: (id: number) => void }) {
+function OrderDetailsModal({ order, onClose, onScan }: { order: any; onClose: () => void; onScan: () => void }) {
   const { t } = useLanguage();
   const product = order.product || order.offer;
+  const awaitingPickup = (order.status === "pending" || order.status === "confirmed") && !order.collectedAt;
   return (
     <Modal visible animationType="fade" transparent onRequestClose={onClose}>
       <View style={sheet.overlay}>
@@ -765,9 +416,9 @@ function OrderDetailsModal({ order, onClose, onConfirm }: { order: any; onClose:
               <Text style={styles.detailValue}>{v}</Text>
             </View>
           ))}
-          {order.status === "pending" && (
-            <TouchableOpacity style={[styles.primaryButton, { marginTop: 16 }]} onPress={() => onConfirm(order.id)}>
-              <Text style={styles.primaryButtonText}>{t("provider.dashboard.confirm_pickup")}</Text>
+          {awaitingPickup && (
+            <TouchableOpacity style={[styles.primaryButton, { marginTop: 16 }]} onPress={onScan}>
+              <Text style={styles.primaryButtonText}>{t("provider.scan_qr") || "Scan QR"}</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -789,26 +440,6 @@ function ProfileEditModal({ user, onClose, onSuccess }: { user: any; onClose: ()
     longitude: (user?.longitude ?? null) as number | null,
   });
 
-  const syncFromMapsLink = async (mapsLink: string) => {
-    const trimmed = mapsLink.trim();
-    if (!trimmed) return;
-    try {
-      const data = await usersApi.extractLocation(trimmed);
-      if (data?.locationName) {
-        setFormData((prev) => ({
-          ...prev,
-          mapsLink,
-          username: data.locationName!,
-          location: data.locationName!,
-          latitude: data.latitude ?? prev.latitude,
-          longitude: data.longitude ?? prev.longitude,
-        }));
-      }
-    } catch {
-      // Non-blocking: user can still edit fields manually
-    }
-  };
-
   const handleLocationChange = (locationName: string, place?: SelectedPlace) => {
     setFormData((prev) => {
       const lat = place?.latitude ?? null;
@@ -829,9 +460,6 @@ function ProfileEditModal({ user, onClose, onSuccess }: { user: any; onClose: ()
 
   const handleFieldChange = (key: string, value: string) => {
     setFormData((prev) => ({ ...prev, [key]: value }));
-    if (key === "mapsLink") {
-      syncFromMapsLink(value);
-    }
   };
 
   const handleSubmit = async () => {
@@ -869,7 +497,7 @@ function ProfileEditModal({ user, onClose, onSuccess }: { user: any; onClose: ()
       <ModalHeader title={t("provider.dashboard.edit_business_profile")} onClose={onClose} />
       <Field label={t("provider.dashboard.business_name")}>
         <View style={styles.inputWrapper}>
-          <Ionicons name="person-outline" size={16} color="#888" style={{ marginRight: 8 }} />
+          <Ionicons name="person-outline" size={16} color={theme.muted} style={{ marginRight: 8 }} />
           <TextInput
             style={[styles.input, { flex: 1, marginBottom: 0 }]}
             value={formData.username}
@@ -887,25 +515,13 @@ function ProfileEditModal({ user, onClose, onSuccess }: { user: any; onClose: ()
       </Field>
       <Field label={t("provider.profile.edit_dialog.phone_number")}>
         <View style={styles.inputWrapper}>
-          <Ionicons name="call-outline" size={16} color="#888" style={{ marginRight: 8 }} />
+          <Ionicons name="call-outline" size={16} color={theme.muted} style={{ marginRight: 8 }} />
           <TextInput
             style={[styles.input, { flex: 1, marginBottom: 0 }]}
             value={formData.phoneNumber}
             onChangeText={(v) => handleFieldChange("phoneNumber", v)}
             placeholder={t("provider.dashboard.phone_placeholder")}
             keyboardType="phone-pad"
-          />
-        </View>
-      </Field>
-      <Field label={t("provider.profile.edit_dialog.maps_link")}>
-        <View style={styles.inputWrapper}>
-          <Ionicons name="map-outline" size={16} color="#888" style={{ marginRight: 8 }} />
-          <TextInput
-            style={[styles.input, { flex: 1, marginBottom: 0 }]}
-            value={formData.mapsLink}
-            onChangeText={(v) => handleFieldChange("mapsLink", v)}
-            placeholder={t("provider.profile.edit_dialog.maps_placeholder")}
-            autoCapitalize="none"
           />
         </View>
       </Field>
@@ -924,7 +540,7 @@ function ModalHeader({ title, subtitle, onClose }: { title: string; subtitle?: s
         {subtitle && <Text style={styles.modalSubtitle}>{subtitle}</Text>}
       </View>
       <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-        <Ionicons name="close" size={20} color="#555" />
+        <Ionicons name="close" size={20} color={theme.foreground} />
       </TouchableOpacity>
     </View>
   );
@@ -952,119 +568,81 @@ function ModalButtons({ onCancel, onSubmit, isLoading, submitLabel, loadingLabel
 
 // ─── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
-  centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 12 },
-  centeredTitle: { fontSize: 22, fontWeight: "800", color: "#111", textAlign: "center" },
-  centeredSubtitle: { fontSize: 14, color: "#888", textAlign: "center" },
-  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 16, borderBottomWidth: 1, borderBottomColor: "#e0e0e0" },
-  headerTitle: { fontSize: 24, fontWeight: "800", color: "#111" },
-  addButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: PRIMARY, alignItems: "center", justifyContent: "center" },
-  tabBar: { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: "#e0e0e0" },
+  container: { flex: 1, backgroundColor: theme.backgroundGradient },
+  centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 12, backgroundColor: theme.backgroundGradient },
+  centeredTitle: { fontSize: 22, fontWeight: "800", color: theme.foreground, textAlign: "center" },
+  centeredSubtitle: { fontSize: 14, color: theme.muted, textAlign: "center" },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+    backgroundColor: theme.card,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.border,
+  },
+  headerTitle: { fontSize: 24, fontWeight: "800", color: theme.foreground },
+  addButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: theme.primary, alignItems: "center", justifyContent: "center" },
+  tabBar: { flexDirection: "row", backgroundColor: theme.card, borderBottomWidth: 1, borderBottomColor: theme.border },
   tab: { paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 2, borderBottomColor: "transparent" },
-  tabActive: { borderBottomColor: PRIMARY },
-  tabText: { fontSize: 14, fontWeight: "500", color: "#888" },
-  tabTextActive: { color: PRIMARY },
-  scrollContent: { padding: 16, paddingBottom: 100, gap: 16 },
+  tabActive: { borderBottomColor: theme.primaryDark },
+  tabText: { fontSize: 14, fontWeight: "500", color: theme.muted },
+  tabTextActive: { color: theme.primaryDark },
+  scrollContent: { paddingHorizontal: 16, gap: 16 },
   statsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
-  statCard: { width: "47%", backgroundColor: "#f9f9f9", borderRadius: 12, padding: 16, borderWidth: 1, borderColor: "#e0e0e0" },
+  statCard: { width: "47%", backgroundColor: theme.card, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: theme.border },
   statRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
-  statValue: { fontSize: 22, fontWeight: "800", color: "#111" },
-  statLabel: { fontSize: 11, color: "#888" },
-  sectionTitle: { fontSize: 17, fontWeight: "700", color: "#111" },
+  statValue: { fontSize: 22, fontWeight: "800", color: theme.foreground },
+  statLabel: { fontSize: 11, color: theme.muted },
+  sectionTitle: { fontSize: 17, fontWeight: "700", color: theme.foreground },
   sectionRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  actionCard: { width: "47%", backgroundColor: "#f9f9f9", borderRadius: 12, padding: 16, borderWidth: 1, borderColor: "#e0e0e0", gap: 6 },
-  actionLabel: { fontSize: 13, fontWeight: "700", color: "#111" },
-  actionSub: { fontSize: 11, color: "#888" },
-  orderCard: { backgroundColor: "#f9f9f9", borderRadius: 12, padding: 16, borderWidth: 1, borderColor: "#e0e0e0" },
+  actionCard: { width: "47%", backgroundColor: theme.card, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: theme.border, gap: 6 },
+  actionLabel: { fontSize: 13, fontWeight: "700", color: theme.foreground },
+  actionSub: { fontSize: 11, color: theme.muted },
+  orderCard: { backgroundColor: theme.card, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: theme.border },
   orderCardRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 },
-  orderTitle: { fontSize: 15, fontWeight: "700", color: "#111" },
-  orderSub: { fontSize: 13, color: "#888", marginTop: 2 },
-  orderPrice: { fontSize: 14, fontWeight: "700", color: PRIMARY },
+  orderTitle: { fontSize: 15, fontWeight: "700", color: theme.foreground },
+  orderSub: { fontSize: 13, color: theme.muted, marginTop: 2 },
+  orderPrice: { fontSize: 14, fontWeight: "700", color: theme.primary },
   orderCardButtons: { flexDirection: "row", gap: 8 },
-  confirmButton: { flex: 1, backgroundColor: PRIMARY, borderRadius: 10, paddingVertical: 10, alignItems: "center" },
+  confirmButton: { flex: 1, backgroundColor: theme.primary, borderRadius: 10, paddingVertical: 10, alignItems: "center" },
   confirmButtonText: { color: "#fff", fontWeight: "600", fontSize: 14 },
-  viewButton: { paddingHorizontal: 14, borderRadius: 10, backgroundColor: "#e0e0e0", alignItems: "center", justifyContent: "center" },
+  viewButton: { paddingHorizontal: 14, borderRadius: 10, backgroundColor: theme.primaryBg, alignItems: "center", justifyContent: "center" },
   mono: { fontFamily: "monospace", fontWeight: "700" },
-  viewAll: { color: PRIMARY, fontWeight: "600", textAlign: "center", marginTop: 8 },
-  offerCard: { borderRadius: 12, borderWidth: 1, borderColor: "#e0e0e0", overflow: "hidden" },
-  offerCardTop: { flexDirection: "row" },
-  offerImage: { width: 96, height: 96 },
-  offerImagePlaceholder: { backgroundColor: "#f0f0f0", alignItems: "center", justifyContent: "center" },
-  offerInfo: { flex: 1, padding: 12, gap: 4 },
-  offerTitle: { fontSize: 14, fontWeight: "700", color: "#111" },
-  offerSub: { fontSize: 12, color: "#888" },
-  offerPrice: { fontSize: 14, fontWeight: "700", color: PRIMARY },
-  offerCardBottom: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 12, backgroundColor: "#f9f9f9" },
-  offerPickup: { fontSize: 12, color: "#888" },
-  offerActions: { flexDirection: "row", gap: 8 },
-  iconButton: { padding: 6, borderRadius: 8, backgroundColor: "#e0e0e0" },
-  emptyBox: { alignItems: "center", padding: 32, borderRadius: 12, borderWidth: 1, borderColor: "#e0e0e0", borderStyle: "dashed", gap: 12 },
-  emptyText: { color: "#888", fontSize: 15 },
-  skeleton: { height: 128, borderRadius: 12, backgroundColor: "#f0f0f0", marginBottom: 12 },
-  primaryButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: PRIMARY, borderRadius: 12, paddingVertical: 14, paddingHorizontal: 20 },
+  viewAll: { color: theme.primaryDark, fontWeight: "600", textAlign: "center", marginTop: 8 },
+  emptyBox: { alignItems: "center", padding: 32, borderRadius: 12, borderWidth: 1, borderColor: theme.border, borderStyle: "dashed", gap: 12 },
+  emptyText: { color: theme.muted, fontSize: 15 },
+  primaryButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: theme.primary, borderRadius: 12, paddingVertical: 14, paddingHorizontal: 20 },
   primaryButtonText: { color: "#fff", fontWeight: "700", fontSize: 15 },
-  smallPrimaryButton: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: PRIMARY, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 12, marginLeft: "auto" },
-  smallPrimaryButtonText: { color: "#fff", fontWeight: "600", fontSize: 13 },
   modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 },
-  modalTitle: { fontSize: 22, fontWeight: "800", color: "#111" },
-  modalSubtitle: { fontSize: 13, color: "#888", marginTop: 2 },
+  modalTitle: { fontSize: 22, fontWeight: "800", color: theme.foreground },
+  modalSubtitle: { fontSize: 13, color: theme.muted, marginTop: 2 },
   modalButtons: { flexDirection: "row", gap: 12, marginTop: 8, paddingBottom: 24 },
-  closeButton: { width: 36, height: 36, borderRadius: 18, backgroundColor: "#f0f0f0", alignItems: "center", justifyContent: "center" },
-  cancelButton: { flex: 1, borderRadius: 12, backgroundColor: "#f0f0f0", alignItems: "center", justifyContent: "center", paddingVertical: 14 },
-  cancelButtonText: { fontSize: 15, fontWeight: "500", color: "#111" },
-  input: { backgroundColor: "#f5f5f5", borderWidth: 1, borderColor: "#e0e0e0", borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: "#111" },
-  inputWrapper: { flexDirection: "row", alignItems: "center", backgroundColor: "#f5f5f5", borderWidth: 1, borderColor: "#e0e0e0", borderRadius: 10, paddingHorizontal: 14 },
-  label: { fontSize: 13, fontWeight: "500", color: "#111", marginBottom: 6 },
-  row: { flexDirection: "row" },
-  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: "#f0f0f0", borderWidth: 1, borderColor: "#e0e0e0" },
-  chipActive: { backgroundColor: PRIMARY, borderColor: PRIMARY },
-  chipText: { fontSize: 13, fontWeight: "500", color: "#555" },
-  chipTextActive: { color: "#fff" },
+  closeButton: { width: 36, height: 36, borderRadius: 18, backgroundColor: theme.primaryBg, alignItems: "center", justifyContent: "center" },
+  cancelButton: { flex: 1, borderRadius: 12, backgroundColor: theme.primaryBg, borderWidth: 1, borderColor: theme.border, alignItems: "center", justifyContent: "center", paddingVertical: 14 },
+  cancelButtonText: { fontSize: 15, fontWeight: "500", color: theme.foreground },
+  input: { backgroundColor: theme.primaryBg, borderWidth: 1, borderColor: theme.border, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: theme.foreground },
+  inputWrapper: { flexDirection: "row", alignItems: "center", backgroundColor: theme.primaryBg, borderWidth: 1, borderColor: theme.border, borderRadius: 10, paddingHorizontal: 14 },
+  label: { fontSize: 13, fontWeight: "500", color: theme.foreground, marginBottom: 6 },
   imagePreview: { width: "100%", height: 160, borderRadius: 12, marginBottom: 8, resizeMode: "cover" },
-  imagePicker: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, padding: 14, borderRadius: 10, backgroundColor: "#f5f5f5", borderWidth: 1, borderColor: "#e0e0e0" },
-  imagePickerText: { fontSize: 14, color: "#555" },
-  detailRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: "#f0f0f0" },
-  detailKey: { color: "#888", fontSize: 14 },
-  detailValue: { fontWeight: "600", fontSize: 14, color: "#111" },
-  hint: { fontSize: 12, color: "#888", marginBottom: 12 },
-  searchInput: {
-    backgroundColor: "#f5f5f5",
-    borderWidth: 1,
-    borderColor: "#e0e0e0",
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    color: "#111",
-    marginBottom: 8,
-  },
-  filterChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: "#f0f0f0",
-    borderWidth: 1,
-    borderColor: "#e0e0e0",
-    marginRight: 8,
-  },
-  filterChipActive: { backgroundColor: PRIMARY, borderColor: PRIMARY },
-  filterChipText: { fontSize: 12, fontWeight: "600", color: "#666" },
-  filterChipTextActive: { color: "#fff" },
+  detailRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: theme.border },
+  detailKey: { color: theme.muted, fontSize: 14 },
+  detailValue: { fontWeight: "600", fontSize: 14, color: theme.foreground },
+  hint: { fontSize: 12, color: theme.muted, marginBottom: 12 },
 });
 
 const sheet = StyleSheet.create({
-  overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" },
-  backdrop: { ...StyleSheet.absoluteFillObject },
+  overlay: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" },
+  backdrop: { flex: 1 },
   container: {
-    backgroundColor: "#fff",
+    backgroundColor: theme.card,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    maxHeight: "92%",
     width: "100%",
   },
   scrollContent: {
     padding: 24,
-    paddingBottom: Platform.OS === "ios" ? 40 : 24,
+    paddingBottom: 16,
   },
 });

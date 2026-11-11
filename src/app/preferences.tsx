@@ -26,6 +26,7 @@ import {
   unregisterPushNotifications,
 } from "@/lib/push-notifications";
 import { sanitizeErrorMessage } from "@/utils/errorUtils";
+import { useScreenBottomPadding } from "@/lib/screen-insets";
 
 const LANGUAGES = [
   { code: "en" as const, name: "English", nativeName: "English", flag: "🇺🇸" },
@@ -44,6 +45,7 @@ const DEFAULT_SETTINGS: NotificationSettings = {
 };
 
 export default function Preferences() {
+  const bottomPad = useScreenBottomPadding();
   const router = useRouter();
   const { language, setLanguage, t } = useLanguage();
   const { isAuthenticated, user } = useAuth();
@@ -162,7 +164,14 @@ export default function Preferences() {
 
   return (
     <View style={styles.container}>
-      <ScreenHeader title={t("preferences.title") || "Preferences"} onBack={() => router.push("/(client)/profile")} />
+      <ScreenHeader
+        title={t("preferences.title") || "Preferences"}
+        onBack={() =>
+          router.push(
+            (isProvider ? "/(provider)/profile" : "/(client)/profile") as any
+          )
+        }
+      />
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.section}>
           <View style={styles.sectionHeader}>

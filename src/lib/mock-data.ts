@@ -5,8 +5,11 @@ export interface Store {
   address: string;
   imageUrl: string;
   logoUrl?: string;
-  rating: string;
+  rating: string | null;
   category: string;
+  mapsLink?: string;
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 export interface Product {
@@ -15,11 +18,16 @@ export interface Product {
   name: string;
   description: string;
   price: number;
-  originalPrice: number;
+  originalPrice?: number | null;
   quantity: number;
   pickupStart: string;
   pickupEnd: string;
+  pickupStartTime?: string | null;
+  pickupEndTime?: string | null;
   imageUrl: string;
+  expirationDate?: string;
+  foodType?: string;
+  taste?: string;
   store?: Store;
 }
 

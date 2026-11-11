@@ -15,7 +15,7 @@ import { authApi, usersApi } from "@/lib/api-client";
 import { useRouter } from "expo-router";
 import Toast from "react-native-toast-message";
 import { getPostAuthRedirect } from "@/lib/redirect-utils";
-import { readAuthIntentRole } from "@/lib/authIntent";
+import { clearAuthIntentRole, readAuthIntentRole } from "@/lib/authIntent";
 import { sanitizeErrorMessage } from "@/utils/errorUtils";
 import { useAuth } from "@/hooks/use-auth";
 
@@ -55,6 +55,9 @@ async function completeSocialSignIn(options: {
   }
 
   const updated = await authApi.getUserByToken();
+  if (updated.role && updated.role !== "NONE") {
+    await clearAuthIntentRole();
+  }
   Toast.show({ type: "success", text1: "Signed in", text2: "Welcome back!" });
   router.replace(getPostAuthRedirect(updated, intentRole) as any);
 }
@@ -170,6 +173,7 @@ function GoogleOAuthButtonConfigured() {
         text2: response.error?.message || "Please try again",
       });
     }
+    // dismiss / cancel: silent — user backed out intentionally
   }, [response, refreshAuth, router]);
 
   return (
@@ -316,11 +320,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 12,
-    paddingVertical: 14,
-    borderRadius: 12,
-    backgroundColor: "#f5f5f5",
-    borderWidth: 1,
-    borderColor: "#e0e0e0",
+    paddingVertical: 15,
+    borderRadius: 14,
+    backgroundColor: "#ffffff",
+    borderWidth: 1.5,
+    borderColor: "#e2e8f0",
+    minHeight: 52,
   },
   iconContainer: {
     width: 24,
@@ -329,26 +334,24 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "#e0e0e0",
   },
   googleG: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: "800",
     color: "#4285F4",
   },
   facebookIcon: {
     backgroundColor: "#1877F2",
-    borderColor: "#1877F2",
+    borderRadius: 12,
   },
   facebookF: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: "800",
     color: "#fff",
   },
   buttonText: {
     fontSize: 15,
     fontWeight: "600",
-    color: "#111",
+    color: "#0f172a",
   },
 });

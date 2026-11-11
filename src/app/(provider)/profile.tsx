@@ -6,12 +6,10 @@ import {
   ScrollView,
   TouchableOpacity,
   Platform,
-  Linking,
-  Image,
 } from "react-native";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
-import { ratingsApi, buildImageUrl } from "@/lib/api-client";
+import { ratingsApi } from "@/lib/api-client";
 import { useToast } from "@/lib/toast";
 import { useRouter } from "expo-router";
 import { useLanguage } from "@/context/LanguageContext";
@@ -19,7 +17,12 @@ import { useProviderStats } from "@/hooks/use-provider-stats";
 import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
 import { ProviderPendingBanner } from "@/components/provider/ProviderPendingBanner";
 import { ProfileCompletionBanner } from "@/components/provider/ProfileCompletionBanner";
-import { formatPriceValue } from "@/utils/formatPrice";
+import { LocationMap } from "@/components/LocationMap";
+import { ProfileImage } from "@/components/ProfileImage";
+import { readCoordinates } from "@/lib/maps-link";
+import { formatPrice } from "@/utils/formatPrice";
+import { useHeaderTopPadding, useTabScreenContentInsets } from "@/lib/screen-insets";
+import { theme } from "@/lib/theme";
 
 import {
   User,
@@ -38,30 +41,14 @@ import {
 } from "lucide-react-native";
 
 // ---------------------------------------------------------------------------
-// Theme (light)
-// ---------------------------------------------------------------------------
-const theme = {
-  background: "#ffffff",
-  card: "#f9f9f9",
-  secondary: "#f1f5f9",
-  border: "#e2e8f0",
-  primary: "#22c55e",
-  primaryForeground: "#ffffff",
-  muted: "#94a3b8",
-  destructive: "#ef4444",
-  destructiveBg: "#fef2f2",
-  destructiveBorder: "#fecaca",
-  text: "#0f172a",
-  textMuted: "#64748b",
-};
-
-// ---------------------------------------------------------------------------
 // ProviderProfile
 // ---------------------------------------------------------------------------
 export default function ProviderProfile() {
   const { user, logoutAsync, isAuthenticated } = useAuth();
   const { toast } = useToast();
   const { t } = useLanguage();
+  const headerTop = useHeaderTopPadding();
+  const contentInsets = useTabScreenContentInsets();
   const router = useRouter();
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
   const { stats, isLoading: statsLoading } = useProviderStats();
@@ -89,7 +76,7 @@ export default function ProviderProfile() {
           return;
         }
         toast({ title: t("auth.signedOut"), description: t("auth.signedOutSuccess") });
-        router.replace("/(auth)/signin");
+        router.replace("/(auth)/welcome");
       },
     });
   };
@@ -123,17 +110,20 @@ export default function ProviderProfile() {
     <>
       <View style={styles.screen}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: headerTop }]}>
         <TouchableOpacity
           style={styles.iconBtn}
           onPress={() => router.push("/(provider)/dashboard")}
         >
-          <ArrowLeft color={theme.text} size={20} />
+          <ArrowLeft color={theme.foreground} size={20} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>{t("profile.title")}</Text>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={[styles.scrollContent, contentInsets]}
+        showsVerticalScrollIndicator={false}
+      >
         {isPendingProvider && <ProviderPendingBanner />}
 
         <ProfileCompletionBanner
@@ -144,15 +134,11 @@ export default function ProviderProfile() {
         {/* User Info Card */}
         <View style={styles.profileCard}>
           <View style={styles.avatarWrap}>
-            {user?.profileImage ? (
-              <Image
-                source={{ uri: buildImageUrl(user.profileImage) || user.profileImage }}
-                style={styles.avatarImage}
-                resizeMode="cover"
-              />
-            ) : (
-              <Text style={styles.avatarInitials}>{initials}</Text>
-            )}
+            <ProfileImage
+              uri={user?.profileImage}
+              style={styles.avatarImage}
+              fallback={<Text style={styles.avatarInitials}>{initials}</Text>}
+            />
           </View>
           <View style={styles.profileInfo}>
             <Text style={styles.profileName}>{displayName}</Text>
@@ -169,29 +155,29 @@ export default function ProviderProfile() {
         {/* Impact Stats */}
         <View style={styles.statsGrid}>
           <StatCard
-            icon={<Store color="#047857" size={20} />}
+            icon={<Store color={theme.primaryDark} size={20} />}
             value={statsLoading ? "..." : String(stats.totalOffers)}
             label={t("provider.profile.active_offers") || "Active Offers"}
-            color="#ecfdf5"
+            color={theme.primaryBg}
           />
           <StatCard
-            icon={<Heart color="#1d4ed8" size={20} />}
+            icon={<Heart color={theme.infoDark} size={20} />}
             value={statsLoading ? "..." : String(stats.totalMealsSaved)}
             label={t("provider.profile.meals_saved") || "Meals Saved"}
-            color="#eff6ff"
+            color={theme.infoBg}
           />
           <StatCard
-            icon={<User color="#b45309" size={20} />}
-            value={statsLoading ? "..." : `${formatPriceValue(stats.revenue)} dt`}
+            icon={<User color={theme.warningDark} size={20} />}
+            value={statsLoading ? "..." : formatPrice(stats.revenue)}
             label={t("provider.profile.total_revenue") || "Revenue"}
-            color="#fffbeb"
+            color={theme.warningBg}
           />
         </View>
 
         {/* Environmental impact */}
         {stats.totalMealsSaved > 0 && (
           <View style={styles.impactCard}>
-            <Leaf color="#16a34a" size={20} />
+            <Leaf color={theme.primaryDark} size={20} />
             <Text style={styles.impactText}>
               {t("profile.impact_summary", {
                 co2: stats.co2Saved.toFixed(1),
@@ -220,26 +206,31 @@ export default function ProviderProfile() {
           {user?.location && (
             <InfoRow icon={<MapPin color={theme.muted} size={18} />} label={t("profile.address")} value={user.location} />
           )}
+          {(() => {
+            const place = readCoordinates(user?.latitude, user?.longitude, user?.mapsLink);
+            if (!place) return null;
+            return (
+              <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
+                <LocationMap
+                  latitude={place.latitude}
+                  longitude={place.longitude}
+                  label={user?.location || undefined}
+                  height={160}
+                />
+              </View>
+            );
+          })()}
           {user?.phoneNumber && (
             <InfoRow icon={<Phone color={theme.muted} size={18} />} label={t("profile.phone")} value={String(user.phoneNumber)} />
           )}
-          {user?.mapsLink && (
-            <InfoRow
-              icon={<MapPin color={theme.muted} size={18} />}
-              label={t("profile.google_maps")}
-              value={t("common.view_on_maps")}
-              onPress={() => user.mapsLink && Linking.openURL(user.mapsLink)}
-              isLink
-            />
-          )}
-          {!user?.username && !user?.location && !user?.phoneNumber && !user?.mapsLink && (
+          {!user?.username && !user?.location && !user?.phoneNumber && (
             <Text style={styles.emptyInfo}>{t("profile.no_business_info")}</Text>
           )}
         </View>
 
         {/* Edit button */}
         <TouchableOpacity style={styles.editBtn} onPress={() => router.push("/account-details" as any)}>
-          <Settings color={theme.text} size={20} />
+          <Settings color={theme.foreground} size={20} />
           <Text style={styles.editBtnText}>{t("profile.edit_business_info")}</Text>
         </TouchableOpacity>
 
@@ -308,7 +299,7 @@ function InfoRow({
       <View style={styles.infoIcon}>{icon}</View>
       <View style={styles.infoContent}>
         <Text style={styles.infoLabel}>{label}</Text>
-        <Text style={[styles.infoValue, isLink && { color: theme.primary }]}>{value}</Text>
+        <Text style={[styles.infoValue, isLink && { color: theme.primaryDark }]}>{value}</Text>
       </View>
     </Wrap>
   );
@@ -320,17 +311,17 @@ function InfoRow({
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: theme.background,
+    backgroundColor: theme.backgroundGradient,
   },
   centered: {
     flex: 1,
-    backgroundColor: theme.background,
+    backgroundColor: theme.backgroundGradient,
     alignItems: "center",
     justifyContent: "center",
     padding: 24,
   },
   heading: {
-    color: theme.text,
+    color: theme.foreground,
     fontSize: 22,
     fontWeight: "700",
     textAlign: "center",
@@ -342,14 +333,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 16,
     paddingHorizontal: 16,
-    paddingTop: Platform.OS === "ios" ? 56 : 16,
     paddingBottom: 16,
-    backgroundColor: theme.background,
+    backgroundColor: theme.card,
     borderBottomWidth: 1,
     borderBottomColor: theme.border,
   },
   headerTitle: {
-    color: theme.text,
+    color: theme.foreground,
     fontSize: 22,
     fontWeight: "700",
     letterSpacing: -0.5,
@@ -358,15 +348,16 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: theme.secondary,
+    backgroundColor: theme.card,
+    borderWidth: 1,
+    borderColor: theme.border,
     alignItems: "center",
     justifyContent: "center",
   },
 
-  // Scroll
+  // Scroll — vertical insets come from useTabScreenContentInsets
   scrollContent: {
-    padding: 16,
-    paddingBottom: 96,
+    paddingHorizontal: 16,
     gap: 16,
   },
 
@@ -385,7 +376,7 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: `${theme.primary}18`,
+    backgroundColor: theme.primaryBg,
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -404,12 +395,12 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   profileName: {
-    color: theme.text,
+    color: theme.foreground,
     fontSize: 18,
     fontWeight: "700",
   },
   profileEmail: {
-    color: theme.textMuted,
+    color: theme.muted,
     fontSize: 13,
   },
   profileBadge: {
@@ -419,7 +410,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   ratingText: {
-    color: "#b45309",
+    color: theme.warningDark,
     fontSize: 12,
     fontWeight: "600",
     marginTop: 4,
@@ -439,27 +430,27 @@ const styles = StyleSheet.create({
   statValue: {
     fontSize: 18,
     fontWeight: "800",
-    color: theme.text,
+    color: theme.foreground,
   },
   statLabel: {
     fontSize: 10,
-    color: theme.textMuted,
+    color: theme.muted,
     fontWeight: "600",
   },
   impactCard: {
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    backgroundColor: "#f0fdf4",
+    backgroundColor: theme.primaryBg,
     borderRadius: 12,
     padding: 14,
     borderWidth: 1,
-    borderColor: "#bbf7d0",
+    borderColor: theme.primaryBorder,
   },
   impactText: {
     flex: 1,
     fontSize: 13,
-    color: "#166534",
+    color: theme.primaryDark,
     fontWeight: "500",
   },
   menuCard: {
@@ -485,12 +476,12 @@ const styles = StyleSheet.create({
   menuItemText: {
     fontSize: 15,
     fontWeight: "600",
-    color: theme.text,
+    color: theme.foreground,
   },
 
   // Section
   sectionTitle: {
-    color: theme.text,
+    color: theme.foreground,
     fontSize: 16,
     fontWeight: "700",
     marginBottom: -8,
@@ -519,7 +510,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   infoLabel: {
-    color: theme.textMuted,
+    color: theme.muted,
     fontSize: 11,
     fontWeight: "500",
     marginBottom: 2,
@@ -527,12 +518,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   infoValue: {
-    color: theme.text,
+    color: theme.foreground,
     fontSize: 14,
     fontWeight: "500",
   },
   emptyInfo: {
-    color: theme.textMuted,
+    color: theme.muted,
     fontSize: 13,
     padding: 16,
     textAlign: "center",
@@ -550,7 +541,7 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
   },
   editBtnText: {
-    color: theme.text,
+    color: theme.foreground,
     fontSize: 15,
     fontWeight: "600",
   },
@@ -565,7 +556,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.destructiveBg,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: theme.destructiveBorder,
+    borderColor: "#fecaca",
   },
   signOutText: {
     color: theme.destructive,

@@ -30,3 +30,8 @@ export async function writeAuthIntentRole(role: AuthIntentRole | null): Promise<
     // ignore storage failures
   }
 }
+
+/** Clear intent after successful role assignment so it cannot poison later signups. */
+export async function clearAuthIntentRole(): Promise<void> {
+  await writeAuthIntentRole(null);
+}

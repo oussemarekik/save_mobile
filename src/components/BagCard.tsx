@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import {
-  View, Text, Image, TouchableOpacity, StyleSheet, ActivityIndicator,
+  View, Text, Image, Pressable, StyleSheet, ActivityIndicator,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useFavorites, useToggleFavorite, useCreateOrder } from "@/hooks/use-shop";
@@ -78,7 +78,10 @@ export function BagCard({ product, store }: BagCardProps) {
     createOrder(
       { productId: product.id, quantity: 1 },
       {
-        onSuccess: () => Toast.show({ type: "success", text1: t("orders.orderPlaced") || "Order placed!" }),
+        onSuccess: () => {
+          Toast.show({ type: "success", text1: t("orders.orderPlaced") || "Order placed!" });
+          setTimeout(() => router.push("/(client)/orders"), 1000);
+        },
         onError: (error: unknown) => Toast.show({
           type: "error",
           text1: t("common.error"),
@@ -89,9 +92,8 @@ export function BagCard({ product, store }: BagCardProps) {
   };
 
   return (
-    <TouchableOpacity
-      style={[s.card, isExpired && s.cardExpired]}
-      activeOpacity={0.92}
+    <Pressable
+      style={({ pressed }) => [s.card, isExpired && s.cardExpired, pressed && s.cardPressed]}
       onPress={() => router.push(`/product/${product.id}`)}
     >
       {/* Image */}
@@ -139,13 +141,20 @@ export function BagCard({ product, store }: BagCardProps) {
 
         {/* Favorite button */}
         {!isExpired && (
-          <TouchableOpacity style={s.favoriteButton} onPress={handleFavorite} activeOpacity={0.8}>
+          <Pressable
+            style={s.favoriteButton}
+            onPress={(e) => {
+              e.stopPropagation?.();
+              handleFavorite();
+            }}
+            hitSlop={8}
+          >
             <Ionicons
               name={isFavorited ? "heart" : "heart-outline"}
               size={16}
               color={isFavorited ? "#ef4444" : "#9ca3af"}
             />
-          </TouchableOpacity>
+          </Pressable>
         )}
 
         {/* Store logo — hide when expired */}
@@ -182,11 +191,13 @@ export function BagCard({ product, store }: BagCardProps) {
                 <Text style={s.originalPrice}>{originalPrice}</Text>
               )}
             </View>
-            <TouchableOpacity
+            <Pressable
               style={[s.orderButton, (isPending || product.quantity === 0) && s.orderButtonDisabled]}
-              onPress={handleOrder}
+              onPress={(e) => {
+                e.stopPropagation?.();
+                handleOrder();
+              }}
               disabled={isPending || product.quantity === 0}
-              activeOpacity={0.85}
             >
               {isPending ? (
                 <ActivityIndicator size="small" color="#fff" />
@@ -196,11 +207,11 @@ export function BagCard({ product, store }: BagCardProps) {
                   <Text style={s.orderButtonText}>Order</Text>
                 </>
               )}
-            </TouchableOpacity>
+            </Pressable>
           </View>
         ) : null}
       </View>
-    </TouchableOpacity>
+    </Pressable>
   );
 }
 
@@ -217,6 +228,7 @@ const s = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     elevation: 2,
   },
+  cardPressed: { opacity: 0.96 },
   cardExpired: { opacity: 0.92 },
 
   // Image
@@ -224,7 +236,7 @@ const s = StyleSheet.create({
   image: { width: "100%", height: "100%" },
   imageBlurred: { transform: [{ scale: 1.05 }] },
   soldOutOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(0,0,0,0.35)",
     alignItems: "center",
     justifyContent: "center",

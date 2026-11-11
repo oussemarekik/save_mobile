@@ -1,9 +1,9 @@
 import Constants from "expo-constants";
+import { API_BASE_URL } from "@/lib/api-base-url";
 
 export const APP_NAME = "Save The Plate";
 export const WEBSITE_URL = "https://savetheplate.tn";
-export const API_URL =
-  (process.env.EXPO_PUBLIC_API_URL || "https://savetheplate.tn/api").replace(/\/$/, "");
+export const API_URL = API_BASE_URL;
 
 export const LEGAL_PAGES = {
   privacy: `${WEBSITE_URL}/privacy`,

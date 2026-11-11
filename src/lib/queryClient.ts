@@ -1,54 +1,24 @@
-import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { AppState, Platform } from "react-native";
+import { QueryClient, focusManager } from "@tanstack/react-query";
 
-async function throwIfResNotOk(res: Response) {
-  if (!res.ok) {
-    const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
-  }
-}
-
-export async function apiRequest(
-  method: string,
-  url: string,
-  data?: unknown | undefined,
-): Promise<Response> {
-  const res = await fetch(url, {
-    method,
-    headers: data ? { "Content-Type": "application/json" } : {},
-    body: data ? JSON.stringify(data) : undefined,
-    credentials: "include",
-  });
-
-  await throwIfResNotOk(res);
-  return res;
-}
-
-type UnauthorizedBehavior = "returnNull" | "throw";
-export const getQueryFn: <T>(options: {
-  on401: UnauthorizedBehavior;
-}) => QueryFunction<T> =
-  ({ on401: unauthorizedBehavior }) =>
-  async ({ queryKey }) => {
-    const res = await fetch(queryKey.join("/") as string, {
-      credentials: "include",
+// React Query does not observe AppState by default on native — wire it so
+// refetchOnWindowFocus works when returning to the app.
+if (Platform.OS !== "web") {
+  focusManager.setEventListener((handleFocus) => {
+    const subscription = AppState.addEventListener("change", (status) => {
+      handleFocus(status === "active");
     });
-
-    if (unauthorizedBehavior === "returnNull" && res.status === 401) {
-      return null;
-    }
-
-    await throwIfResNotOk(res);
-    return await res.json();
-  };
+    return () => subscription.remove();
+  });
+}
 
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
-      refetchOnWindowFocus: false,
-      staleTime: Infinity,
-      retry: false,
+      refetchOnWindowFocus: true,
+      staleTime: 1000 * 60 * 2, // 2 minutes — offers/orders stay reasonably fresh
+      retry: 1,
     },
     mutations: {
       retry: false,

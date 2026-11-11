@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -9,18 +9,31 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Pressable,
 } from "react-native";
-import { useRouter, Link, Redirect } from "expo-router";
+import { useRouter, Redirect } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { authApi, usersApi, tokenStorage } from "@/lib/api-client";
 import { useAuth } from "@/hooks/use-auth";
 import { useLanguage } from "@/context/LanguageContext";
 import { Ionicons } from "@expo/vector-icons";
-import { theme } from "@/lib/theme";
 import Toast from "react-native-toast-message";
-import { sanitizeErrorMessage } from "@/utils/errorUtils";
-import { writeAuthIntentRole } from "@/lib/authIntent";
-import { LocationAutocomplete, generateMapsLink, type SelectedPlace } from "@/components/LocationAutocomplete";
-import { safeGoBack } from "@/lib/navigation";
+import { ApiError, sanitizeErrorMessage } from "@/utils/errorUtils";
+import { clearAuthIntentRole, writeAuthIntentRole } from "@/lib/authIntent";
+import {
+  LocationAutocomplete,
+  generateMapsLink,
+  type SelectedPlace,
+} from "@/components/LocationAutocomplete";
+import { LocationMap } from "@/components/LocationMap";
+
+/** Match sign-in (Too Good To Go–style) palette */
+const GREEN = "#004225";
+const CREAM = "#F7F5F0";
+const MUTED = "#5C6B63";
+const LINE = "#C8CFC9";
+
+type ViewMode = "email" | "account" | "details" | "phone" | "verify" | "success";
 
 function normalizePhoneNumber(value: string) {
   return value.replace(/\D/g, "");
@@ -28,237 +41,402 @@ function normalizePhoneNumber(value: string) {
 
 export default function ProviderSignup() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { t } = useLanguage();
   const { user, isLoading: authLoading, refreshAuth } = useAuth();
 
-  const [loading, setLoading] = useState(false);
-  const [showSuccess, setShowSuccess] = useState(false);
-  const [errorMessage, setErrorMessage] = useState("");
+  const [view, setView] = useState<ViewMode>("email");
+  const [submitting, setSubmitting] = useState(false);
+  const [verifyingCode, setVerifyingCode] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
+  const [verificationCode, setVerificationCode] = useState("");
+
+  const [email, setEmail] = useState("");
+  const [businessName, setBusinessName] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [phoneNumber, setPhoneNumber] = useState("");
+  const [location, setLocation] = useState("");
+  const [mapsLink, setMapsLink] = useState("");
+  const [latitude, setLatitude] = useState<number | null>(null);
+  const [longitude, setLongitude] = useState<number | null>(null);
+  const [placeId, setPlaceId] = useState("");
 
   useEffect(() => {
     writeAuthIntentRole("PROVIDER");
   }, []);
 
-  const [formData, setFormData] = useState({
-    businessName: "",
-    location: "",
-    mapsLink: "",
-    email: "",
-    phoneNumber: "",
-    password: "",
-    confirmPassword: "",
-    latitude: null as number | null,
-    longitude: null as number | null,
-    placeId: "",
-  });
+  const showError = (message: string) => {
+    Toast.show({ type: "error", text1: t("common.error"), text2: message });
+  };
 
-  const updateField = (name: keyof typeof formData, value: string) => {
-    setFormData((prev) => {
-      const next = { ...prev, [name]: value };
-      if (name === "businessName" && prev.location.trim()) {
-        next.mapsLink = generateMapsLink(
-          prev.location.trim(),
-          value.trim(),
-          prev.latitude,
-          prev.longitude,
-          prev.placeId
-        );
-      }
-      return next;
-    });
-    setErrorMessage("");
+  const showSuccess = (message: string) => {
+    Toast.show({ type: "success", text1: t("common.success"), text2: message });
   };
 
   const handleLocationChange = (locationName: string, place?: SelectedPlace) => {
     const extractedBusinessName = place?.name?.trim() || "";
     const lat = place?.latitude ?? null;
     const lng = place?.longitude ?? null;
-    const placeId = place?.placeId || "";
+    const nextPlaceId = place?.placeId || "";
 
-    setFormData((prev) => {
-      const isBusinessNameEmpty = !prev.businessName.trim();
-      const isLocationChanging = locationName !== prev.location;
-      const isLocationCleared = !locationName.trim();
-      const wasBusinessNameFromLocation = prev.businessName.trim() === prev.location.trim();
+    setLocation(locationName);
+    setLatitude(lat);
+    setLongitude(lng);
+    setPlaceId(nextPlaceId);
 
-      let businessName = prev.businessName;
-      if (isLocationCleared) {
-        businessName = "";
-      } else if (isBusinessNameEmpty) {
-        businessName = extractedBusinessName;
-      } else if (extractedBusinessName && isLocationChanging && wasBusinessNameFromLocation) {
-        businessName = extractedBusinessName;
-      }
+    const isLocationCleared = !locationName.trim();
+    const wasBusinessNameFromLocation =
+      businessName.trim() &&
+      (businessName.trim() === location.trim() ||
+        (!!extractedBusinessName && businessName.trim() === extractedBusinessName));
 
-      const mapsLink = locationName.trim()
-        ? generateMapsLink(locationName.trim(), businessName, lat, lng, placeId)
-        : "";
+    let nextBusinessName = businessName;
+    if (isLocationCleared) {
+      nextBusinessName = "";
+    } else if (!businessName.trim()) {
+      nextBusinessName = extractedBusinessName;
+    } else if (extractedBusinessName && wasBusinessNameFromLocation) {
+      nextBusinessName = extractedBusinessName;
+    }
 
-      return {
-        ...prev,
-        location: locationName,
-        latitude: lat,
-        longitude: lng,
-        placeId,
-        mapsLink,
-        businessName,
-      };
-    });
-    setErrorMessage("");
+    if (nextBusinessName !== businessName) {
+      setBusinessName(nextBusinessName);
+    }
+
+    setMapsLink(
+      locationName.trim()
+        ? generateMapsLink(
+            locationName.trim(),
+            nextBusinessName,
+            lat,
+            lng,
+            nextPlaceId
+          )
+        : ""
+    );
   };
 
-  const validateForm = () => {
-    const normalizedPhone = normalizePhoneNumber(formData.phoneNumber);
+  const handleEmailContinue = () => {
+    if (!email.includes("@")) {
+      showError(t("signin.error_email_required"));
+      return;
+    }
+    setView("account");
+  };
 
-    if (!formData.businessName.trim()) {
-      setErrorMessage("Business name is required. Please enter your business name.");
-      return false;
+  const handleAccountContinue = () => {
+    if (!businessName.trim()) {
+      showError(
+        t("business_signup.error_business_name") ||
+          "Business name is required."
+      );
+      return;
     }
-    if (formData.businessName.trim().length < 2) {
-      setErrorMessage("Business name must be at least 2 characters long.");
-      return false;
+    if (businessName.trim().length < 2) {
+      showError(
+        t("business_signup.error_business_name_short") ||
+          "Business name must be at least 2 characters."
+      );
+      return;
     }
-    if (formData.businessName.trim().length > 100) {
-      setErrorMessage("Business name is too long. Please enter a maximum of 100 characters.");
-      return false;
+    if (password.length < 8) {
+      showError(t("signin.error_password_short"));
+      return;
     }
-    if (!formData.location.trim()) {
-      setErrorMessage("Business location is required. Please enter your business address.");
-      return false;
+    if (!confirmPassword) {
+      showError(t("signin.error_confirm_password_required"));
+      return;
     }
-    if (formData.location.trim().length < 5) {
-      setErrorMessage("Location is too short. Please enter a complete address.");
-      return false;
-    }
-    if (!formData.email.trim()) {
-      setErrorMessage("Email is required for business account creation.");
-      return false;
-    }
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(formData.email.trim())) {
-      setErrorMessage("Invalid email format. Please enter a valid email address.");
-      return false;
-    }
-    if (!normalizedPhone) {
-      setErrorMessage("Phone number is required. Please enter your business phone number.");
-      return false;
-    }
-    if (normalizedPhone.length < 8) {
-      setErrorMessage("Phone number is too short. Please enter at least 8 digits.");
-      return false;
-    }
-    if (normalizedPhone.length > 15) {
-      setErrorMessage("Phone number is too long. Please enter maximum 15 digits.");
-      return false;
-    }
-    if (formData.password.length < 8) {
-      setErrorMessage("Password must be at least 8 characters long.");
-      return false;
-    }
-    if (formData.password.length > 128) {
-      setErrorMessage("Password is too long. Maximum 128 characters.");
-      return false;
-    }
-    if (formData.password !== formData.confirmPassword) {
-      setErrorMessage("Passwords do not match. Please confirm your password carefully.");
-      return false;
+    if (password !== confirmPassword) {
+      showError(t("signin.error_password_mismatch"));
+      return;
     }
     if (!termsAccepted) {
-      setErrorMessage(t("business_signup.error_terms"));
-      return false;
+      showError(t("business_signup.error_terms"));
+      return;
     }
-    return true;
+    setView("details");
+  };
+
+  const handleLocationContinue = () => {
+    if (!location.trim() || location.trim().length < 5) {
+      showError(
+        t("business_signup.error_location") ||
+          "Please enter a complete business address."
+      );
+      return;
+    }
+    setView("phone");
+  };
+
+  const finishProviderOnboarding = async () => {
+    await clearAuthIntentRole();
+    const authedUser = await refreshAuth();
+    setView("success");
+    setTimeout(() => {
+      if (
+        authedUser?.role === "PROVIDER" ||
+        authedUser?.role === "PENDING_PROVIDER"
+      ) {
+        router.replace("/(provider)/dashboard");
+      } else {
+        router.replace("/");
+      }
+    }, 1800);
   };
 
   const handleSubmit = async () => {
-    if (!validateForm()) return;
+    if (!location.trim() || location.trim().length < 5) {
+      showError(
+        t("business_signup.error_location") ||
+          "Please enter a complete business address."
+      );
+      setView("details");
+      return;
+    }
 
-    setLoading(true);
-    setErrorMessage("");
+    const normalizedPhone = normalizePhoneNumber(phoneNumber);
+    if (!normalizedPhone) {
+      showError(
+        t("business_signup.error_phone_required") ||
+          "Phone number is required."
+      );
+      return;
+    }
+    if (normalizedPhone.length < 8 || normalizedPhone.length > 15) {
+      showError(t("business_signup.error_phone_invalid"));
+      return;
+    }
 
+    setSubmitting(true);
     let createdUser = false;
     let hadToken = false;
 
     try {
-      const normalizedPhone = normalizePhoneNumber(formData.phoneNumber);
       const phoneForBackend =
-        normalizedPhone.length > 10 ? normalizedPhone.slice(-10) : normalizedPhone;
+        normalizedPhone.length > 10
+          ? normalizedPhone.slice(-10)
+          : normalizedPhone;
+
+      const nextMapsLink =
+        mapsLink.trim() ||
+        generateMapsLink(
+          location.trim(),
+          businessName.trim(),
+          latitude,
+          longitude,
+          placeId
+        );
 
       const signupResponse = await authApi.registerBusiness({
-        email: formData.email.trim(),
+        email: email.trim(),
         phoneNumber: phoneForBackend,
-        password: formData.password,
-        username: formData.businessName.trim(),
-        location: formData.location.trim(),
-        mapsLink: formData.mapsLink.trim(),
-        latitude: formData.latitude,
-        longitude: formData.longitude,
+        password,
+        username: businessName.trim(),
+        location: location.trim(),
+        mapsLink: nextMapsLink,
+        latitude,
+        longitude,
       });
 
-      if (!signupResponse.accessToken) throw new Error("Invalid response from server");
+      if (!signupResponse.accessToken) {
+        throw new Error("Invalid response from server");
+      }
 
       createdUser = true;
       hadToken = true;
 
+      if (
+        signupResponse.user &&
+        signupResponse.user.emailVerified === false
+      ) {
+        try {
+          await authApi.sendVerificationEmail(email.trim());
+          showSuccess(t("signin.verification_sent"));
+        } catch {
+          showError(t("signin.error_verification_email_failed"));
+        }
+        setView("verify");
+        return;
+      }
+
       await usersApi.setRole("PROVIDER");
       await usersApi.updateDetails({
         phoneNumber: phoneForBackend,
-        mapsLink: formData.mapsLink.trim(),
-        location: formData.location.trim(),
-        latitude: formData.latitude ?? undefined,
-        longitude: formData.longitude ?? undefined,
+        mapsLink: nextMapsLink,
+        location: location.trim(),
+        latitude: latitude ?? undefined,
+        longitude: longitude ?? undefined,
       });
 
-      const authedUser = await refreshAuth();
-      setShowSuccess(true);
-
-      setTimeout(() => {
-        if (
-          authedUser?.role === "PROVIDER" ||
-          authedUser?.role === "PENDING_PROVIDER"
-        ) {
-          router.replace("/(provider)/dashboard");
-        } else {
-          router.replace("/");
-        }
-      }, 2000);
+      await finishProviderOnboarding();
     } catch (err: any) {
       if (createdUser && hadToken) {
         try {
-          await tokenStorage.remove();
           await authApi.cleanupPartialSignup();
         } catch {
-          // best-effort cleanup
+          // best-effort
+        }
+        try {
+          await tokenStorage.remove();
+        } catch {
+          // ignore
         }
       }
+
+      if (err instanceof ApiError && err.status === 409) {
+        showError(t("signin.error_account_exists"));
+        router.push("/(auth)/signin");
+        return;
+      }
+
       const msg = sanitizeErrorMessage(err, {
         action: "create business account",
         defaultMessage: t("business_signup.error_generic"),
       });
-      setErrorMessage(msg);
-      Toast.show({ type: "error", text1: t("common.error"), text2: msg });
+      if (msg.toLowerCase().includes("already exists")) {
+        showError(t("signin.error_account_exists"));
+        router.push("/(auth)/signin");
+      } else {
+        showError(msg);
+      }
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
+  const handleVerifyCode = async () => {
+    if (verificationCode.length !== 6) {
+      showError("Please enter a valid 6-digit code.");
+      return;
+    }
+
+    setVerifyingCode(true);
+    try {
+      const response = await authApi.verifyEmailCode(
+        email.trim(),
+        verificationCode.trim()
+      );
+      if (!response.verified) throw new Error(t("signin.error_verify_code"));
+
+      const normalizedPhone = normalizePhoneNumber(phoneNumber);
+      const phoneForBackend =
+        normalizedPhone.length > 10
+          ? normalizedPhone.slice(-10)
+          : normalizedPhone;
+      const nextMapsLink =
+        mapsLink.trim() ||
+        generateMapsLink(
+          location.trim(),
+          businessName.trim(),
+          latitude,
+          longitude,
+          placeId
+        );
+
+      await usersApi.setRole("PROVIDER");
+      await usersApi.updateDetails({
+        phoneNumber: phoneForBackend,
+        mapsLink: nextMapsLink,
+        location: location.trim(),
+        latitude: latitude ?? undefined,
+        longitude: longitude ?? undefined,
+      });
+
+      await finishProviderOnboarding();
+    } catch (error: any) {
+      showError(
+        sanitizeErrorMessage(error, {
+          action: "verify email code",
+          defaultMessage: t("signin.error_verify_code"),
+        })
+      );
+    } finally {
+      setVerifyingCode(false);
+    }
+  };
+
+  const handleResendCode = async () => {
+    if (!email.trim()) {
+      showError(t("signin.error_email_required"));
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await authApi.sendVerificationEmail(email.trim());
+      showSuccess(t("signin.verification_sent"));
+    } catch (error: any) {
+      showError(
+        sanitizeErrorMessage(error, {
+          action: "resend verification code",
+          defaultMessage: t("signin.error_resend_code"),
+        })
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const goBack = () => {
+    if (view === "account") {
+      setView("email");
+      setPassword("");
+      setConfirmPassword("");
+      setShowPassword(false);
+      return;
+    }
+    if (view === "details") {
+      setView("account");
+      return;
+    }
+    if (view === "phone") {
+      setView("details");
+      return;
+    }
+    if (view === "verify") {
+      setView("phone");
+      return;
+    }
+    if (router.canGoBack()) router.back();
+    else router.replace("/(auth)/welcome");
+  };
+
+  const busy = view === "verify" ? verifyingCode : submitting;
+
+  const onPrimary = () => {
+    if (view === "email") return handleEmailContinue();
+    if (view === "account") return handleAccountContinue();
+    if (view === "details") return handleLocationContinue();
+    if (view === "phone") return handleSubmit();
+    if (view === "verify") return handleVerifyCode();
+  };
+
+  const primaryLabel =
+    view === "phone"
+      ? t("business_signup.submit")
+      : view === "verify"
+        ? t("signin.verify_button")
+        : t("common.continue") || "Continue";
+
+  const headline =
+    view === "email"
+      ? t("business_signup.tgtg_email") || "What's your business email?"
+      : view === "account"
+        ? t("business_signup.tgtg_create") || "Create your provider account"
+        : view === "details"
+          ? t("business_signup.tgtg_details") || "Tell us about your business"
+          : view === "phone"
+            ? t("business_signup.tgtg_phone") || "What's your business phone number?"
+            : view === "verify"
+              ? t("signin.verify_email_title")
+              : t("business_signup.success_title");
+
   if (authLoading) {
     return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" color={theme.primary} />
-        <Text style={styles.loadingText}>{t("common.loading")}</Text>
-      </View>
-    );
-  }
-
-  if (showSuccess) {
-    return (
-      <View style={styles.centered}>
-        <Ionicons name="checkmark-circle" size={72} color={theme.primary} />
-        <Text style={styles.successTitle}>{t("business_signup.success_title")}</Text>
-        <Text style={styles.successMessage}>{t("business_signup.success_message")}</Text>
-        <ActivityIndicator color={theme.primary} style={{ marginTop: 16 }} />
+      <View style={styles.loading}>
+        <ActivityIndicator size="large" color={GREEN} />
       </View>
     );
   }
@@ -267,253 +445,531 @@ export default function ProviderSignup() {
     return <Redirect href="/(provider)/dashboard" />;
   }
 
+  if (user?.role === "CLIENT") {
+    return <Redirect href="/account-details" />;
+  }
+
+  if (view === "success") {
+    return (
+      <View style={[styles.root, styles.successWrap]}>
+        <Ionicons name="checkmark-circle" size={72} color={GREEN} />
+        <Text style={styles.successTitle}>
+          {t("business_signup.success_title")}
+        </Text>
+        <Text style={styles.successMessage}>
+          {t("business_signup.success_message")}
+        </Text>
+        <ActivityIndicator color={GREEN} style={{ marginTop: 16 }} />
+      </View>
+    );
+  }
+
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-    >
-      <View style={styles.topBar}>
-        <TouchableOpacity onPress={() => safeGoBack(router, "/(auth)/signin")} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={22} color="#111" />
+    <View style={[styles.root, { paddingTop: insets.top }]}>
+      <View style={styles.nav}>
+        <TouchableOpacity
+          onPress={goBack}
+          style={styles.navBack}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        >
+          <Ionicons name="chevron-back" size={28} color={GREEN} />
         </TouchableOpacity>
-        <Text style={styles.topTitle}>{t("business_signup.title")}</Text>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-        <Text style={styles.subtitle}>{t("business_signup.subtitle")}</Text>
-
-        {errorMessage ? (
-          <View style={styles.errorBox}>
-            <Text style={styles.errorText}>{errorMessage}</Text>
-          </View>
-        ) : null}
-
-        <View style={styles.field}>
-          <Text style={styles.label}>
-            {t("business_signup.address") || "Business Location"}
-          </Text>
-          <LocationAutocomplete
-            value={formData.location}
-            onChange={handleLocationChange}
-            placeholder={
-              t("business_signup.location_search_placeholder") ||
-              "Search for your business location..."
-            }
-          />
-          <Text style={styles.hint}>
-            {t("business_signup.location_search_hint") ||
-              "Start typing your business name or address. A Google Maps link will be generated automatically."}
-          </Text>
-        </View>
-        {formData.mapsLink ? (
-          <Text style={styles.mapsPreview} numberOfLines={2}>
-            Maps: {formData.mapsLink}
-          </Text>
-        ) : null}
-        <Field
-          label={t("business_signup.business_name")}
-          value={formData.businessName}
-          onChangeText={(v) => updateField("businessName", v)}
-          placeholder={t("business_signup.business_name_placeholder")}
-        />
-        <Text style={[styles.hint, { marginTop: -8, marginBottom: 16 }]}>
-          {t("business_signup.business_name_from_location_hint") ||
-            "Business name is filled automatically when you pick a location."}
-        </Text>
-        <Field
-          label={t("business_signup.email")}
-          value={formData.email}
-          onChangeText={(v) => updateField("email", v)}
-          placeholder={t("business_signup.email_placeholder")}
-          keyboardType="email-address"
-        />
-        <Field
-          label={t("business_signup.phone")}
-          value={formData.phoneNumber}
-          onChangeText={(v) => updateField("phoneNumber", v)}
-          placeholder={t("business_signup.phone_placeholder")}
-          keyboardType="phone-pad"
-        />
-        <Field
-          label={t("business_signup.password")}
-          value={formData.password}
-          onChangeText={(v) => updateField("password", v)}
-          placeholder={t("business_signup.password_placeholder")}
-          secure
-        />
-        <Field
-          label={t("business_signup.confirm_password")}
-          value={formData.confirmPassword}
-          onChangeText={(v) => updateField("confirmPassword", v)}
-          placeholder={t("business_signup.confirm_password")}
-          secure
-        />
-
-        <TouchableOpacity
-          style={styles.termsRow}
-          onPress={() => setTermsAccepted(!termsAccepted)}
-          activeOpacity={0.8}
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          bounces={false}
         >
-          <Ionicons
-            name={termsAccepted ? "checkbox" : "square-outline"}
-            size={22}
-            color={termsAccepted ? theme.primary : "#888"}
-          />
-          <Text style={styles.termsText}>
-            {t("business_signup.terms_accept")}{" "}
-            <Text
-              style={styles.termsLink}
-              onPress={() => router.push("/legal/terms" as any)}
-            >
-              {t("business_signup.terms_link")}
-            </Text>{" "}
-            {t("business_signup.terms_and")}{" "}
-            <Text
-              style={styles.termsLink}
-              onPress={() => router.push("/legal/privacy" as any)}
-            >
-              {t("business_signup.privacy_link")}
-            </Text>
-          </Text>
-        </TouchableOpacity>
+          <Text style={styles.headline}>{headline}</Text>
 
-        <TouchableOpacity
-          style={[styles.submitBtn, loading && styles.disabled]}
-          onPress={handleSubmit}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.submitText}>{t("business_signup.submit")}</Text>
+          {view === "email" && (
+            <>
+              <Text style={styles.helper}>
+                {t("business_signup.tgtg_email_helper") ||
+                  "We'll use this for your provider account."}
+              </Text>
+              <UnderlineInput
+                value={email}
+                onChangeText={setEmail}
+                placeholder={t("business_signup.email_placeholder")}
+                keyboardType="email-address"
+                autoComplete="email"
+                textContentType="emailAddress"
+                autoFocus
+                returnKeyType="next"
+                onSubmitEditing={handleEmailContinue}
+              />
+              <TouchableOpacity
+                style={styles.switchHit}
+                onPress={() => router.push("/(auth)/signin")}
+              >
+                <Text style={styles.switchText}>
+                  {t("business_signup.already_have_account")}{" "}
+                  <Text style={styles.switchLink}>
+                    {t("business_signup.sign_in_here")}
+                  </Text>
+                </Text>
+              </TouchableOpacity>
+            </>
           )}
-        </TouchableOpacity>
 
-        <View style={styles.signInRow}>
-          <Text style={styles.signInMuted}>{t("business_signup.already_have_account")}</Text>
-          <Link href="/(auth)/signin" asChild>
-            <TouchableOpacity>
-              <Text style={styles.signInLink}>{t("business_signup.sign_in_here")}</Text>
-            </TouchableOpacity>
-          </Link>
-        </View>
+          {view === "account" && (
+            <>
+              <Text style={styles.helper}>{email}</Text>
+              <UnderlineInput
+                value={businessName}
+                onChangeText={(v) => {
+                  setBusinessName(v);
+                  if (location.trim()) {
+                    setMapsLink(
+                      generateMapsLink(
+                        location.trim(),
+                        v.trim(),
+                        latitude,
+                        longitude,
+                        placeId
+                      )
+                    );
+                  }
+                }}
+                placeholder={t("business_signup.business_name_placeholder")}
+                autoComplete="organization"
+                textContentType="organizationName"
+                autoFocus
+                autoCapitalize="words"
+              />
+              <UnderlineInput
+                value={password}
+                onChangeText={setPassword}
+                placeholder={t("signin.password_placeholder_signup")}
+                secure
+                showPassword={showPassword}
+                onTogglePassword={() => setShowPassword(!showPassword)}
+                autoComplete="password-new"
+                textContentType="newPassword"
+              />
+              <Text style={styles.hint}>{t("signin.password_hint")}</Text>
+              <UnderlineInput
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                placeholder={t("signin.confirm_password_placeholder")}
+                secure
+                showPassword={showPassword}
+                onTogglePassword={() => setShowPassword(!showPassword)}
+                autoComplete="password-new"
+                textContentType="newPassword"
+              />
+              <Pressable
+                style={styles.termsRow}
+                onPress={() => setTermsAccepted(!termsAccepted)}
+              >
+                <View
+                  style={[styles.checkbox, termsAccepted && styles.checkboxOn]}
+                >
+                  {termsAccepted ? (
+                    <Ionicons name="checkmark" size={14} color="#fff" />
+                  ) : null}
+                </View>
+                <Text style={styles.termsText}>
+                  {t("business_signup.terms_accept")}{" "}
+                  <Text
+                    style={styles.termsLink}
+                    onPress={() => router.push("/legal/terms" as any)}
+                  >
+                    {t("business_signup.terms_link")}
+                  </Text>{" "}
+                  {t("business_signup.terms_and")}{" "}
+                  <Text
+                    style={styles.termsLink}
+                    onPress={() => router.push("/legal/privacy" as any)}
+                  >
+                    {t("business_signup.privacy_link")}
+                  </Text>
+                </Text>
+              </Pressable>
+            </>
+          )}
 
-        <View style={styles.benefitsBox}>
-          <Text style={styles.benefitsTitle}>{t("business_signup.benefits_title")}</Text>
-          <Text style={styles.benefitItem}>• {t("business_signup.benefit1")}</Text>
-          <Text style={styles.benefitItem}>• {t("business_signup.benefit2")}</Text>
-          <Text style={styles.benefitItem}>• {t("business_signup.benefit3")}</Text>
-          <Text style={styles.benefitItem}>• {t("business_signup.benefit4")}</Text>
+          {view === "details" && (
+            <>
+              <Text style={styles.helper}>
+                {t("business_signup.tgtg_details_helper") ||
+                  "Add your address so customers can find you."}
+              </Text>
+              <Text style={styles.fieldLabel}>
+                {t("business_signup.address")}
+              </Text>
+              <LocationAutocomplete
+                value={location}
+                onChange={handleLocationChange}
+                placeholder={
+                  t("business_signup.location_search_placeholder") ||
+                  "Search for your business location..."
+                }
+                variant="underline"
+              />
+              <Text style={styles.hint}>
+                {t("business_signup.location_search_hint")}
+              </Text>
+              {latitude != null && longitude != null ? (
+                <LocationMap
+                  latitude={latitude}
+                  longitude={longitude}
+                  label={location}
+                  mapsUrl={mapsLink}
+                />
+              ) : null}
+            </>
+          )}
+
+          {view === "phone" && (
+            <>
+              <Text style={styles.helper}>
+                {t("business_signup.tgtg_phone_helper") ||
+                  "Customers use this number to reach you at pickup."}
+              </Text>
+              <Text style={styles.fieldLabel}>
+                {t("business_signup.phone")}
+              </Text>
+              <UnderlineInput
+                value={phoneNumber}
+                onChangeText={setPhoneNumber}
+                placeholder={t("business_signup.phone_placeholder")}
+                keyboardType="phone-pad"
+                autoComplete="tel"
+                textContentType="telephoneNumber"
+                autoFocus
+              />
+            </>
+          )}
+
+          {view === "verify" && (
+            <>
+              <Text style={styles.helper}>
+                {t("signin.verify_email_desc")}{" "}
+                <Text style={styles.emphasis}>{email.trim()}</Text>
+              </Text>
+              <UnderlineInput
+                value={verificationCode}
+                onChangeText={(v) =>
+                  setVerificationCode(v.replace(/\D/g, "").slice(0, 6))
+                }
+                placeholder={t("signin.verification_code_placeholder")}
+                keyboardType="number-pad"
+                textContentType="oneTimeCode"
+                autoComplete="sms-otp"
+                maxLength={6}
+                center
+                autoFocus
+              />
+              <TouchableOpacity
+                onPress={handleResendCode}
+                disabled={submitting}
+              >
+                <Text style={styles.forgotText}>
+                  {submitting
+                    ? t("signin.sending")
+                    : t("signin.resend_code")}
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </ScrollView>
+
+        <View
+          style={[
+            styles.footer,
+            { paddingBottom: Math.max(insets.bottom, 16) },
+          ]}
+        >
+          <TouchableOpacity
+            style={[styles.pill, busy && styles.pillDisabled]}
+            onPress={onPrimary}
+            disabled={busy}
+            activeOpacity={0.88}
+          >
+            {busy ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.pillText}>{primaryLabel}</Text>
+            )}
+          </TouchableOpacity>
         </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
-function Field({
-  label,
+function UnderlineInput({
   value,
   onChangeText,
   placeholder,
   keyboardType,
   secure,
+  showPassword,
+  onTogglePassword,
+  autoComplete,
+  textContentType,
+  maxLength,
+  center,
+  autoFocus,
+  returnKeyType,
+  onSubmitEditing,
+  autoCapitalize,
 }: {
-  label: string;
   value: string;
   onChangeText: (v: string) => void;
   placeholder?: string;
-  keyboardType?: "default" | "email-address" | "phone-pad";
+  keyboardType?: "default" | "email-address" | "phone-pad" | "number-pad";
   secure?: boolean;
+  showPassword?: boolean;
+  onTogglePassword?: () => void;
+  autoComplete?: any;
+  textContentType?: any;
+  maxLength?: number;
+  center?: boolean;
+  autoFocus?: boolean;
+  returnKeyType?: "next" | "go" | "done";
+  onSubmitEditing?: () => void;
+  autoCapitalize?: "none" | "sentences" | "words" | "characters";
 }) {
+  const [focused, setFocused] = useState(false);
+
   return (
-    <View style={styles.field}>
-      <Text style={styles.label}>{label}</Text>
+    <View style={[styles.inputWrap, focused && styles.inputWrapFocused]}>
       <TextInput
-        style={styles.input}
+        style={[
+          styles.input,
+          center && styles.inputCenter,
+          secure && onTogglePassword ? { paddingRight: 40 } : null,
+        ]}
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor="#999"
+        placeholderTextColor="#9AA59E"
         keyboardType={keyboardType}
-        secureTextEntry={secure}
-        autoCapitalize={keyboardType === "email-address" ? "none" : "sentences"}
+        autoCapitalize={
+          autoCapitalize ??
+          (keyboardType === "email-address" ? "none" : "sentences")
+        }
+        autoCorrect={false}
+        secureTextEntry={secure && !showPassword}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        autoComplete={autoComplete}
+        textContentType={textContentType}
+        maxLength={maxLength}
+        autoFocus={autoFocus}
+        returnKeyType={returnKeyType}
+        onSubmitEditing={onSubmitEditing}
       />
+      {secure && onTogglePassword ? (
+        <TouchableOpacity
+          onPress={onTogglePassword}
+          style={styles.eye}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons
+            name={showPassword ? "eye-off-outline" : "eye-outline"}
+            size={22}
+            color={MUTED}
+          />
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
-  centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, backgroundColor: "#fff" },
-  loadingText: { marginTop: 12, color: theme.muted },
-  successTitle: { fontSize: 24, fontWeight: "800", color: "#111", marginTop: 16, textAlign: "center" },
-  successMessage: { fontSize: 15, color: theme.muted, marginTop: 8, textAlign: "center", lineHeight: 22 },
-  topBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingTop: Platform.OS === "ios" ? 56 : 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.border,
+  root: {
+    flex: 1,
+    backgroundColor: CREAM,
   },
-  backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#f5f5f5",
+  flex: { flex: 1 },
+  loading: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: CREAM,
+  },
+  successWrap: {
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
+  },
+  successTitle: {
+    fontSize: 28,
+    fontWeight: "800",
+    color: GREEN,
+    marginTop: 16,
+    textAlign: "center",
+    letterSpacing: -0.4,
+  },
+  successMessage: {
+    fontSize: 16,
+    color: MUTED,
+    marginTop: 10,
+    textAlign: "center",
+    lineHeight: 22,
+    maxWidth: 320,
+  },
+
+  nav: {
+    height: 52,
+    justifyContent: "center",
+    paddingHorizontal: 8,
+  },
+  navBack: {
+    width: 44,
+    height: 44,
     alignItems: "center",
     justifyContent: "center",
   },
-  topTitle: { fontSize: 20, fontWeight: "800", color: "#111", flex: 1 },
-  scroll: { padding: 20, paddingBottom: 40 },
-  subtitle: { fontSize: 14, color: theme.muted, marginBottom: 20, lineHeight: 20 },
-  errorBox: {
-    backgroundColor: theme.destructiveBg,
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: "#fecaca",
+
+  scroll: {
+    paddingHorizontal: 24,
+    paddingTop: 8,
+    paddingBottom: 24,
   },
-  errorText: { color: theme.destructive, fontSize: 14, lineHeight: 20 },
-  field: { marginBottom: 16 },
-  label: { fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 },
+
+  headline: {
+    fontSize: 32,
+    fontWeight: "800",
+    color: GREEN,
+    letterSpacing: -0.6,
+    lineHeight: 38,
+    marginBottom: 10,
+  },
+  helper: {
+    fontSize: 16,
+    lineHeight: 22,
+    color: MUTED,
+    marginBottom: 28,
+  },
+  emphasis: {
+    color: GREEN,
+    fontWeight: "700",
+  },
+  fieldLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: MUTED,
+    marginBottom: 4,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+
+  inputWrap: {
+    borderBottomWidth: 2,
+    borderBottomColor: LINE,
+    marginBottom: 22,
+    minHeight: 48,
+    justifyContent: "center",
+  },
+  inputWrapFocused: {
+    borderBottomColor: GREEN,
+  },
   input: {
-    backgroundColor: "#f5f5f5",
-    borderWidth: 1,
-    borderColor: theme.border,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    fontSize: 18,
+    color: GREEN,
+    paddingVertical: Platform.OS === "ios" ? 12 : 10,
+    paddingHorizontal: 0,
+  },
+  inputCenter: {
+    textAlign: "center",
+    letterSpacing: 8,
+    fontWeight: "700",
+    fontSize: 26,
+  },
+  eye: {
+    position: "absolute",
+    right: 0,
+    top: 0,
+    bottom: 0,
+    justifyContent: "center",
+  },
+
+  hint: {
+    fontSize: 13,
+    color: MUTED,
+    marginTop: -14,
+    marginBottom: 18,
+    lineHeight: 18,
+  },
+  forgotText: {
     fontSize: 15,
-    color: "#111",
+    fontWeight: "700",
+    color: GREEN,
+    marginTop: 4,
   },
-  mapsPreview: { fontSize: 11, color: theme.muted, marginTop: -8, marginBottom: 12 },
-  hint: { fontSize: 12, color: theme.muted, marginTop: 6, lineHeight: 18 },
-  termsRow: { flexDirection: "row", alignItems: "flex-start", gap: 10, marginBottom: 20 },
-  termsText: { flex: 1, fontSize: 13, color: "#555", lineHeight: 20 },
-  termsLink: { color: theme.primary, fontWeight: "700", textDecorationLine: "underline" },
-  submitBtn: {
-    backgroundColor: theme.primary,
-    borderRadius: 12,
-    paddingVertical: 16,
+
+  switchHit: {
+    marginTop: 8,
+  },
+  switchText: {
+    fontSize: 15,
+    color: MUTED,
+  },
+  switchLink: {
+    color: GREEN,
+    fontWeight: "700",
+  },
+
+  termsRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    marginTop: 4,
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: LINE,
     alignItems: "center",
+    justifyContent: "center",
+    marginTop: 1,
   },
-  submitText: { color: "#fff", fontWeight: "700", fontSize: 16 },
-  disabled: { opacity: 0.6 },
-  signInRow: { marginTop: 20, alignItems: "center", gap: 4 },
-  signInMuted: { fontSize: 14, color: theme.muted },
-  signInLink: { fontSize: 14, color: theme.primary, fontWeight: "700" },
-  benefitsBox: {
-    marginTop: 28,
-    padding: 16,
-    backgroundColor: theme.primaryBg,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: theme.primaryBorder,
+  checkboxOn: {
+    backgroundColor: GREEN,
+    borderColor: GREEN,
   },
-  benefitsTitle: { fontWeight: "700", fontSize: 15, marginBottom: 10, color: "#111" },
-  benefitItem: { fontSize: 13, color: "#444", lineHeight: 22 },
+  termsText: {
+    flex: 1,
+    fontSize: 14,
+    color: MUTED,
+    lineHeight: 20,
+  },
+  termsLink: {
+    color: GREEN,
+    fontWeight: "700",
+    textDecorationLine: "underline",
+  },
+
+  footer: {
+    paddingHorizontal: 24,
+    paddingTop: 8,
+    backgroundColor: CREAM,
+  },
+  pill: {
+    backgroundColor: GREEN,
+    borderRadius: 28,
+    height: 56,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pillDisabled: { opacity: 0.5 },
+  pillText: {
+    color: "#fff",
+    fontSize: 17,
+    fontWeight: "700",
+  },
 });

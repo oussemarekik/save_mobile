@@ -8,11 +8,7 @@ import {
   Image,
   TextInput,
   Modal,
-  ActivityIndicator,
-  Alert,
   Platform,
-  KeyboardAvoidingView,
-  Animated,
   Dimensions,
 } from "react-native";
 import { useAuth } from "@/hooks/use-auth";
@@ -24,16 +20,17 @@ import { useRouter } from "expo-router";
 import { useLanguage } from "@/context/LanguageContext";
 import { ProviderPendingBanner } from "@/components/provider/ProviderPendingBanner";
 import { ProviderQRScannerModal } from "@/components/provider/ProviderQRScannerModal";
+import { ProfileImage } from "@/components/ProfileImage";
+import { useHeaderTopPadding, useTabScreenContentInsets } from "@/lib/screen-insets";
+import { theme } from "@/lib/theme";
 
 import {
   Clock,
-  CheckCircle2,
   X,
   ShoppingBag,
   ArrowLeft,
   User,
-  Package,
-  DollarSign,
+  ChevronRight,
   QrCode,
 } from "lucide-react-native";
 
@@ -42,41 +39,18 @@ type OrderFilter = "all" | "pending" | "confirmed" | "cancelled" | "expired";
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 // ---------------------------------------------------------------------------
-// Theme — update these to match your app's color system
-// ---------------------------------------------------------------------------
-const theme = {
-  background: "#ffffff",
-  card: "#f9f9f9",
-  secondary: "#f1f5f9",
-  border: "#e2e8f0",
-  primary: "#22c55e",
-  primaryForeground: "#ffffff",
-  muted: "#94a3b8",
-  destructive: "#ef4444",
-  text: "#0f172a",
-  textMuted: "#64748b",
-  warning: "#f59e0b",
-  warningBg: "#fef3c7",
-  warningText: "#92400e",
-  successBg: "#d1fae5",
-  successText: "#065f46",
-  errorBg: "#fee2e2",
-  errorText: "#991b1b",
-};
-
-// ---------------------------------------------------------------------------
 // Status badge helper
 // ---------------------------------------------------------------------------
 function statusStyle(status: string) {
   switch (status) {
     case "pending":
-      return { bg: theme.warningBg, text: theme.warningText };
+      return { bg: theme.warningBg, text: theme.warningDark };
     case "confirmed":
-      return { bg: theme.successBg, text: theme.successText };
+      return { bg: theme.successBg, text: theme.primaryDark };
     case "cancelled":
-      return { bg: theme.errorBg, text: theme.errorText };
+      return { bg: theme.destructiveBg, text: theme.destructive };
     default:
-      return { bg: theme.secondary, text: theme.textMuted };
+      return { bg: theme.backgroundGradient, text: theme.muted };
   }
 }
 
@@ -87,6 +61,8 @@ export default function ProviderOrders() {
   const { user, isAuthenticated } = useAuth();
   const { toast } = useToast();
   const { t } = useLanguage();
+  const headerTop = useHeaderTopPadding();
+  const contentInsets = useTabScreenContentInsets();
   const router = useRouter();
   const queryClient = useQueryClient();
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
@@ -103,21 +79,28 @@ export default function ProviderOrders() {
     enabled: isAuthenticated,
   });
 
-  const confirmOrderMutation = useMutation({
-    mutationFn: (id: number) => ordersApi.confirm(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/orders"] });
-      toast({ title: t("orders.confirmed"), description: t("provider.dashboard.order_confirmed_desc") });
-      setSelectedOrder(null);
-    },
-  });
-
   const scanOrderMutation = useMutation({
     mutationFn: (qrCodeToken: string) => ordersApi.scan(qrCodeToken),
-    onSuccess: () => {
+    onSuccess: (result: any) => {
+      const scanned = result?.order;
+      if (scanned?.id) {
+        queryClient.setQueryData<any[]>(["/orders/provider"], (current) =>
+          (current || []).map((order) =>
+            order.id === scanned.id
+              ? {
+                  ...order,
+                  status: scanned.status || "confirmed",
+                  collectedAt: scanned.collectedAt || new Date().toISOString(),
+                }
+              : order
+          )
+        );
+      }
+      queryClient.invalidateQueries({ queryKey: ["/orders/provider"] });
       queryClient.invalidateQueries({ queryKey: ["/orders"] });
       toast({ title: t("provider.dashboard.order_found"), description: t("provider.dashboard.order_found_desc") });
       setShowQRScanner(false);
+      setSelectedOrder(null);
     },
     onError: (error: any) => {
       toast({
@@ -180,25 +163,28 @@ export default function ProviderOrders() {
   return (
     <View style={styles.screen}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: headerTop }]}>
         <View style={styles.headerLeft}>
           <TouchableOpacity
             style={styles.iconBtn}
             onPress={() => router.push("/(provider)/dashboard")}
           >
-            <ArrowLeft color={theme.text} size={20} />
+            <ArrowLeft color={theme.foreground} size={20} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Orders</Text>
         </View>
         <TouchableOpacity
-          style={[styles.iconBtn, { backgroundColor: theme.primary }]}
+          style={[styles.iconBtn, styles.iconBtnPrimary]}
           onPress={() => setShowQRScanner(true)}
         >
-          <QrCode color={theme.primaryForeground} size={20} />
+          <QrCode color="#fff" size={20} />
         </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={[styles.scrollContent, contentInsets]}
+        showsVerticalScrollIndicator={false}
+      >
         {isPendingProvider && <ProviderPendingBanner />}
 
         <TextInput
@@ -252,8 +238,7 @@ export default function ProviderOrders() {
               key={order.id}
               order={order}
               onPress={() => setSelectedOrder(order)}
-              onConfirm={() => confirmOrderMutation.mutate(order.id)}
-              confirming={confirmOrderMutation.isPending}
+              onScan={() => setShowQRScanner(true)}
             />
           ))
         ) : (
@@ -269,7 +254,10 @@ export default function ProviderOrders() {
         <OrderDetailsModal
           order={selectedOrder}
           onClose={() => setSelectedOrder(null)}
-          onConfirm={(id) => confirmOrderMutation.mutate(id)}
+          onScan={() => {
+            setSelectedOrder(null);
+            setShowQRScanner(true);
+          }}
         />
       )}
 
@@ -277,7 +265,14 @@ export default function ProviderOrders() {
       <ProviderQRScannerModal
         visible={showQRScanner}
         onClose={() => setShowQRScanner(false)}
-        onScan={(token) => scanOrderMutation.mutate(token)}
+        onScan={async (token) => {
+          try {
+            await scanOrderMutation.mutateAsync(token);
+            return true;
+          } catch {
+            return false;
+          }
+        }}
       />
     </View>
   );
@@ -289,22 +284,31 @@ export default function ProviderOrders() {
 function OrderCard({
   order,
   onPress,
-  onConfirm,
-  confirming,
 }: {
   order: any;
   onPress: () => void;
-  onConfirm: () => void;
-  confirming: boolean;
+  onScan: () => void;
 }) {
-  const badge = statusStyle(order.status);
+  const { t } = useLanguage();
+  const isCollected = order.status === "confirmed" && !!order.collectedAt;
+  const badge = isCollected
+    ? { bg: theme.successBg, text: theme.primaryDark }
+    : statusStyle(order.status);
+  const badgeLabel = isCollected
+    ? t("orders.picked_up") || "Picked up"
+    : order.status === "expired"
+      ? t("orders.expired") || "Missed pickup"
+      : t(`provider.status.${order.status}`) || order.status;
 
   return (
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.75}>
-      {/* Client row */}
       <View style={styles.clientRow}>
         <View style={styles.clientAvatar}>
-          <User color={theme.primary} size={20} />
+          <ProfileImage
+            uri={order.user?.profileImage}
+            style={styles.clientAvatarImage}
+            fallback={<User color={theme.primaryDark} size={20} />}
+          />
         </View>
         <View style={styles.clientInfo}>
           <Text style={styles.clientName} numberOfLines={1}>
@@ -312,68 +316,16 @@ function OrderCard({
               order.user?.email ||
               `Client #${order.userId || order.id}`}
           </Text>
-          {order.user?.phoneNumber && (
-            <Text style={styles.clientPhone}>{order.user.phoneNumber}</Text>
-          )}
+          <Text style={styles.clientPhone} numberOfLines={1}>
+            {order.product?.name || order.offer?.title || t("provider.dashboard.order_default") || "Order"}
+            {" · "}
+            {formatPrice(order.totalPrice || 0)}
+          </Text>
         </View>
         <View style={[styles.statusBadge, { backgroundColor: badge.bg }]}>
-          <Text style={[styles.statusText, { color: badge.text }]}>{order.status}</Text>
+          <Text style={[styles.statusText, { color: badge.text }]}>{badgeLabel}</Text>
         </View>
-      </View>
-
-      {/* Product row */}
-      <View style={styles.productRow}>
-        {order.product?.imageUrl && (
-          <Image
-            source={{ uri: order.product.imageUrl }}
-            style={styles.productImage}
-            resizeMode="cover"
-          />
-        )}
-        <View style={styles.productInfo}>
-          <Text style={styles.productName} numberOfLines={1}>
-            {order.product?.name || order.offer?.title || "Order"}
-          </Text>
-          <View style={styles.metaRow}>
-            <Package color={theme.textMuted} size={12} />
-            <Text style={styles.metaText}>Qty: {order.quantity}</Text>
-            <DollarSign color={theme.textMuted} size={12} />
-            <Text style={[styles.metaText, { color: theme.text, fontWeight: "600" }]}>
-              {formatPrice(order.totalPrice || 0)}
-            </Text>
-          </View>
-          {order.product?.pickupStart && order.product?.pickupEnd && (
-            <View style={styles.metaRow}>
-              <Clock color={theme.textMuted} size={12} />
-              <Text style={styles.metaText}>
-                {order.product.pickupStart} – {order.product.pickupEnd}
-              </Text>
-            </View>
-          )}
-        </View>
-      </View>
-
-      {/* Footer */}
-      <View style={styles.cardFooter}>
-        {order.status !== "cancelled" && (
-          <View style={{ flex: 1, marginRight: 8 }}>
-            <Text style={styles.pickupCode} numberOfLines={1}>
-              <Text style={styles.pickupCodeLabel}>Code  </Text>
-              {order.pickupCode || order.qrCodeToken || order.id}
-            </Text>
-          </View>
-        )}
-        {order.status === "pending" && (
-          <TouchableOpacity
-            style={styles.confirmBtn}
-            onPress={(e) => {
-              onConfirm();
-            }}
-            disabled={confirming}
-          >
-            <Text style={styles.confirmBtnText}>Confirm</Text>
-          </TouchableOpacity>
-        )}
+        <ChevronRight color={theme.muted} size={18} />
       </View>
     </TouchableOpacity>
   );
@@ -385,13 +337,21 @@ function OrderCard({
 function OrderDetailsModal({
   order,
   onClose,
-  onConfirm,
+  onScan,
 }: {
   order: any;
   onClose: () => void;
-  onConfirm: (id: number) => void;
+  onScan: () => void;
 }) {
+  const { t } = useLanguage();
   const product = order.product || order.offer;
+  const isCollected = order.status === "confirmed" && !!order.collectedAt;
+  const awaitingPickup = (order.status === "pending" || order.status === "confirmed") && !order.collectedAt;
+  const statusLabel = isCollected
+    ? t("orders.picked_up") || "Picked up"
+    : order.status === "expired"
+      ? t("orders.expired") || "Missed pickup"
+      : t(`provider.status.${order.status}`) || order.status;
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
@@ -399,9 +359,9 @@ function OrderDetailsModal({
         <View style={styles.modalCard}>
           {/* Header */}
           <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Order Details</Text>
+            <Text style={styles.modalTitle}>{t("provider.dashboard.order_details") || "Order Details"}</Text>
             <TouchableOpacity style={styles.iconBtn} onPress={onClose}>
-              <X color={theme.text} size={20} />
+              <X color={theme.foreground} size={20} />
             </TouchableOpacity>
           </View>
 
@@ -414,6 +374,26 @@ function OrderDetailsModal({
               />
             )}
 
+            <View style={styles.detailClientRow}>
+              <View style={styles.clientAvatar}>
+                <ProfileImage
+                  uri={order.user?.profileImage}
+                  style={styles.clientAvatarImage}
+                  fallback={<User color={theme.primaryDark} size={20} />}
+                />
+              </View>
+              <View style={styles.clientInfo}>
+                <Text style={styles.clientName} numberOfLines={1}>
+                  {order.user?.username ||
+                    order.user?.email ||
+                    `Client #${order.userId || order.id}`}
+                </Text>
+                {order.user?.phoneNumber ? (
+                  <Text style={styles.clientPhone}>{order.user.phoneNumber}</Text>
+                ) : null}
+              </View>
+            </View>
+
             <Text style={styles.detailProductName}>
               {product?.name || order.offer?.title || "Order"}
             </Text>
@@ -424,32 +404,30 @@ function OrderDetailsModal({
             )}
 
             <View style={styles.detailRows}>
-              <DetailRow label="Quantity" value={String(order.quantity)} />
+              <DetailRow label={t("provider.dashboard.quantity") || "Quantity"} value={String(order.quantity)} />
               <DetailRow
-                label="Price"
+                label={t("provider.dashboard.price") || "Price"}
                 value={formatPrice(order.totalPrice || 0)}
               />
               <DetailRow
-                label="Status"
-                value={order.status}
+                label={t("provider.dashboard.status") || "Status"}
+                value={statusLabel}
                 valueStyle={{
-                  color:
-                    order.status === "confirmed"
-                      ? theme.primary
+                  color: isCollected || order.status === "confirmed"
+                      ? theme.primaryDark
                       : order.status === "pending"
-                      ? theme.warning
-                      : theme.textMuted,
-                  textTransform: "capitalize",
+                      ? theme.warningDark
+                      : theme.muted,
                 }}
               />
               <DetailRow
-                label="Pickup Code"
+                label={t("provider.dashboard.pickup_code") || "Pickup Code"}
                 value={String(order.pickupCode || order.qrCodeToken || order.id)}
                 valueStyle={{ fontFamily: Platform.OS === "ios" ? "Courier" : "monospace", fontWeight: "700" }}
               />
               {order.createdAt && (
                 <DetailRow
-                  label="Order Date"
+                  label={t("provider.dashboard.order_date") || "Order Date"}
                   value={new Date(order.createdAt).toLocaleDateString()}
                 />
               )}
@@ -461,12 +439,12 @@ function OrderDetailsModal({
               )}
             </View>
 
-            {order.status === "pending" && (
+            {awaitingPickup && (
               <TouchableOpacity
                 style={[styles.btnPrimary, { marginTop: 16 }]}
-                onPress={() => onConfirm(order.id)}
+                onPress={onScan}
               >
-                <Text style={styles.btnPrimaryText}>Confirm Pickup</Text>
+                <Text style={styles.btnPrimaryText}>{t("provider.scan_qr") || "Scan QR"}</Text>
               </TouchableOpacity>
             )}
 
@@ -501,17 +479,17 @@ function DetailRow({
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: theme.background,
+    backgroundColor: theme.backgroundGradient,
   },
   centered: {
     flex: 1,
-    backgroundColor: theme.background,
+    backgroundColor: theme.backgroundGradient,
     alignItems: "center",
     justifyContent: "center",
     padding: 24,
   },
   heading: {
-    color: theme.text,
+    color: theme.foreground,
     fontSize: 22,
     fontWeight: "700",
     textAlign: "center",
@@ -523,9 +501,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
-    paddingTop: Platform.OS === "ios" ? 56 : 16,
     paddingBottom: 16,
-    backgroundColor: theme.background,
+    backgroundColor: theme.card,
     borderBottomWidth: 1,
     borderBottomColor: theme.border,
   },
@@ -535,7 +512,7 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   headerTitle: {
-    color: theme.text,
+    color: theme.foreground,
     fontSize: 22,
     fontWeight: "700",
     letterSpacing: -0.5,
@@ -544,26 +521,31 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: theme.secondary,
+    backgroundColor: theme.card,
+    borderWidth: 1,
+    borderColor: theme.border,
     alignItems: "center",
     justifyContent: "center",
   },
+  iconBtnPrimary: {
+    backgroundColor: theme.primary,
+    borderColor: theme.primary,
+  },
 
-  // Scroll
+  // Scroll — vertical insets come from useTabScreenContentInsets
   scrollContent: {
-    padding: 16,
-    paddingBottom: 96,
+    paddingHorizontal: 16,
     gap: 12,
   },
   searchInput: {
-    backgroundColor: theme.secondary,
+    backgroundColor: theme.card,
     borderWidth: 1,
     borderColor: theme.border,
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 15,
-    color: theme.text,
+    color: theme.foreground,
   },
 
   // Filter tabs
@@ -577,25 +559,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 12,
-    backgroundColor: theme.secondary,
+    backgroundColor: theme.card,
+    borderWidth: 1,
+    borderColor: theme.border,
     alignItems: "center",
   },
   filterTabActive: {
-    backgroundColor: theme.primary,
+    backgroundColor: theme.primaryDark,
+    borderColor: theme.primaryDark,
   },
   filterTabText: {
-    color: theme.textMuted,
+    color: theme.foreground,
     fontSize: 12,
     fontWeight: "500",
   },
   filterTabTextActive: {
-    color: theme.primaryForeground,
+    color: "#fff",
     fontWeight: "700",
   },
 
   // Skeleton
   skeletonCard: {
-    backgroundColor: theme.card,
+    backgroundColor: theme.primaryBorder,
     borderRadius: 16,
     height: 128,
     opacity: 0.5,
@@ -613,7 +598,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   emptyText: {
-    color: theme.textMuted,
+    color: theme.muted,
     fontSize: 14,
     marginTop: 12,
   },
@@ -631,29 +616,39 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.border,
     gap: 10,
   },
   clientAvatar: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: `${theme.primary}1a`,
+    backgroundColor: theme.primaryBg,
     alignItems: "center",
     justifyContent: "center",
+    overflow: "hidden",
+  },
+  clientAvatarImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+  },
+  detailClientRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 14,
   },
   clientInfo: {
     flex: 1,
     minWidth: 0,
   },
   clientName: {
-    color: theme.text,
+    color: theme.foreground,
     fontSize: 13,
     fontWeight: "600",
   },
   clientPhone: {
-    color: theme.textMuted,
+    color: theme.muted,
     fontSize: 11,
     marginTop: 1,
   },
@@ -676,7 +671,7 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 10,
-    backgroundColor: theme.secondary,
+    backgroundColor: theme.primaryBg,
   },
   productInfo: {
     flex: 1,
@@ -684,7 +679,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   productName: {
-    color: theme.text,
+    color: theme.foreground,
     fontSize: 13,
     fontWeight: "700",
   },
@@ -694,7 +689,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   metaText: {
-    color: theme.textMuted,
+    color: theme.muted,
     fontSize: 12,
     marginRight: 8,
   },
@@ -704,17 +699,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderTopWidth: 1,
-    borderTopColor: `${theme.border}88`,
-    backgroundColor: `${theme.secondary}66`,
+    borderTopColor: theme.border,
   },
   pickupCode: {
-    color: theme.text,
+    color: theme.foreground,
     fontSize: 12,
     fontFamily: Platform.OS === "ios" ? "Courier" : "monospace",
     fontWeight: "700",
   },
   pickupCodeLabel: {
-    color: theme.textMuted,
+    color: theme.muted,
     fontWeight: "400",
     fontFamily: undefined,
   },
@@ -725,7 +719,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.primary,
   },
   confirmBtnText: {
-    color: theme.primaryForeground,
+    color: "#fff",
     fontSize: 12,
     fontWeight: "700",
   },
@@ -739,7 +733,7 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   modalCard: {
-    backgroundColor: theme.background,
+    backgroundColor: theme.card,
     borderRadius: 24,
     width: "100%",
     maxWidth: 420,
@@ -759,7 +753,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   modalTitle: {
-    color: theme.text,
+    color: theme.foreground,
     fontSize: 20,
     fontWeight: "700",
     letterSpacing: -0.3,
@@ -782,18 +776,18 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingVertical: 10,
     borderRadius: 12,
-    backgroundColor: theme.secondary,
+    backgroundColor: theme.primaryBg,
   },
   modeBtnActive: {
     backgroundColor: theme.primary,
   },
   modeBtnText: {
-    color: theme.textMuted,
+    color: theme.muted,
     fontSize: 13,
     fontWeight: "600",
   },
   modeBtnTextActive: {
-    color: theme.primaryForeground,
+    color: "#fff",
   },
 
   // Camera placeholder
@@ -806,7 +800,7 @@ const styles = StyleSheet.create({
     width: 220,
     height: 220,
     position: "relative",
-    backgroundColor: `${theme.secondary}44`,
+    backgroundColor: theme.primaryBg,
     borderRadius: 8,
     alignItems: "center",
     justifyContent: "center",
@@ -861,13 +855,13 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 6,
   },
   cameraHint: {
-    color: theme.text,
+    color: theme.foreground,
     fontSize: 13,
     fontWeight: "600",
     textAlign: "center",
   },
   cameraSubHint: {
-    color: theme.textMuted,
+    color: theme.muted,
     fontSize: 12,
     textAlign: "center",
     paddingHorizontal: 16,
@@ -878,23 +872,23 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   label: {
-    color: theme.text,
+    color: theme.foreground,
     fontSize: 13,
     fontWeight: "500",
     marginBottom: 2,
   },
   input: {
-    backgroundColor: theme.secondary,
+    backgroundColor: theme.primaryBg,
     borderWidth: 1,
     borderColor: theme.border,
     borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 14,
-    color: theme.text,
+    color: theme.foreground,
     fontSize: 15,
   },
   inputHint: {
-    color: theme.textMuted,
+    color: theme.muted,
     fontSize: 12,
     marginBottom: 8,
   },
@@ -912,21 +906,21 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   btnPrimaryText: {
-    color: theme.primaryForeground,
+    color: "#fff",
     fontWeight: "700",
     fontSize: 15,
   },
   btnSecondary: {
     paddingVertical: 14,
     borderRadius: 14,
-    backgroundColor: theme.secondary,
+    backgroundColor: theme.primaryBg,
     borderWidth: 1,
     borderColor: theme.border,
     alignItems: "center",
     justifyContent: "center",
   },
   btnSecondaryText: {
-    color: theme.text,
+    color: theme.foreground,
     fontWeight: "500",
     fontSize: 15,
   },
@@ -940,16 +934,16 @@ const styles = StyleSheet.create({
     height: 180,
     borderRadius: 14,
     marginBottom: 14,
-    backgroundColor: theme.secondary,
+    backgroundColor: theme.primaryBg,
   },
   detailProductName: {
-    color: theme.text,
+    color: theme.foreground,
     fontSize: 18,
     fontWeight: "700",
     marginBottom: 4,
   },
   detailDescription: {
-    color: theme.textMuted,
+    color: theme.muted,
     fontSize: 13,
     marginBottom: 16,
     lineHeight: 18,
@@ -967,11 +961,11 @@ const styles = StyleSheet.create({
     borderBottomColor: theme.border,
   },
   detailLabel: {
-    color: theme.textMuted,
+    color: theme.muted,
     fontSize: 14,
   },
   detailValue: {
-    color: theme.text,
+    color: theme.foreground,
     fontSize: 14,
     fontWeight: "500",
     textAlign: "right",

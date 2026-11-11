@@ -16,6 +16,8 @@ import { ScreenHeader } from "@/components/ScreenHeader";
 import { theme } from "@/lib/theme";
 import { notificationsApi, type AppNotification } from "@/lib/api-client";
 import { useAuth } from "@/hooks/use-auth";
+import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
+import { useScreenBottomPadding } from "@/lib/screen-insets";
 
 function iconForType(type: string): keyof typeof Ionicons.glyphMap {
   switch (type) {
@@ -37,11 +39,17 @@ function iconForType(type: string): keyof typeof Ionicons.glyphMap {
 export default function NotificationsScreen() {
   const router = useRouter();
   const { t } = useLanguage();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const queryClient = useQueryClient();
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
+  const bottomPad = useScreenBottomPadding();
   const [page, setPage] = useState(1);
   const [items, setItems] = useState<AppNotification[]>([]);
   const [hasMore, setHasMore] = useState(true);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const isProvider =
+    user?.role === "PROVIDER" || user?.role === "PENDING_PROVIDER";
+  const profileHref = isProvider ? "/(provider)/profile" : "/(client)/profile";
 
   const { isLoading, isFetching, refetch } = useQuery({
     queryKey: ["notifications", page],
@@ -70,17 +78,64 @@ export default function NotificationsScreen() {
     },
   });
 
+  const deleteOne = useMutation({
+    mutationFn: (id: number) => notificationsApi.deleteOne(id),
+    onSuccess: (_data, id) => {
+      setItems((prev) => prev.filter((n) => n.id !== id));
+      queryClient.invalidateQueries({ queryKey: ["notifications-unread"] });
+    },
+    onSettled: () => setDeletingId(null),
+  });
+
+  const deleteAll = useMutation({
+    mutationFn: () => notificationsApi.deleteAll(),
+    onSuccess: () => {
+      setItems([]);
+      setHasMore(false);
+      queryClient.invalidateQueries({ queryKey: ["notifications-unread"] });
+    },
+  });
+
   const onRefresh = useCallback(async () => {
     setPage(1);
     await refetch();
   }, [refetch]);
+
+  const handleDeleteOne = (id: number) => {
+    confirm({
+      title: t("notifications.delete_confirm_title") || "Delete notification",
+      message:
+        t("notifications.delete_confirm_message") ||
+        "Remove this notification from your list?",
+      confirmLabel: t("common.delete") || "Delete",
+      destructive: true,
+      onConfirm: async () => {
+        setDeletingId(id);
+        await deleteOne.mutateAsync(id);
+      },
+    });
+  };
+
+  const handleDeleteAll = () => {
+    confirm({
+      title: t("notifications.delete_all_confirm_title") || "Delete all notifications",
+      message:
+        t("notifications.delete_all_confirm_message") ||
+        "This will permanently remove all your notifications.",
+      confirmLabel: t("common.delete") || "Delete",
+      destructive: true,
+      onConfirm: async () => {
+        await deleteAll.mutateAsync();
+      },
+    });
+  };
 
   if (!isAuthenticated) {
     return (
       <View style={styles.container}>
         <ScreenHeader
           title={t("notifications.title") || "Notifications"}
-          onBack={() => router.push("/(client)/profile")}
+          onBack={() => router.push(profileHref as any)}
         />
         <View style={styles.centered}>
           <Text style={styles.emptyTitle}>{t("auth.signInRequired") || "Sign in required"}</Text>
@@ -96,12 +151,19 @@ export default function NotificationsScreen() {
     <View style={styles.container}>
       <ScreenHeader
         title={t("notifications.title") || "Notifications"}
-        onBack={() => router.push("/(client)/profile")}
+        onBack={() => router.push(profileHref as any)}
         right={
-          items.some((n) => !n.read) ? (
-            <TouchableOpacity onPress={() => markAll.mutate()} disabled={markAll.isPending}>
-              <Text style={styles.markAll}>{t("notifications.markAllRead") || "Mark all read"}</Text>
-            </TouchableOpacity>
+          items.length > 0 ? (
+            <View style={styles.headerActions}>
+              {items.some((n) => !n.read) ? (
+                <TouchableOpacity onPress={() => markAll.mutate()} disabled={markAll.isPending}>
+                  <Text style={styles.markAll}>{t("notifications.markAllRead") || "Mark all read"}</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity onPress={handleDeleteAll} disabled={deleteAll.isPending}>
+                <Text style={styles.clearAll}>{t("notifications.clearAll") || "Clear all"}</Text>
+              </TouchableOpacity>
+            </View>
           ) : undefined
         }
       />
@@ -114,7 +176,7 @@ export default function NotificationsScreen() {
         <FlatList
           data={items}
           keyExtractor={(item) => String(item.id)}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, { paddingBottom: bottomPad }]}
           refreshControl={
             <RefreshControl refreshing={isFetching && page === 1} onRefresh={onRefresh} tintColor={theme.primary} />
           }
@@ -125,25 +187,40 @@ export default function NotificationsScreen() {
             </View>
           }
           renderItem={({ item }) => (
-            <TouchableOpacity
-              style={[styles.card, !item.read && styles.cardUnread]}
-              onPress={() => {
-                if (!item.read) markOne.mutate(item.id);
-              }}
-              activeOpacity={0.85}
-            >
-              <View style={[styles.iconWrap, !item.read && styles.iconWrapUnread]}>
-                <Ionicons name={iconForType(item.type)} size={20} color={theme.primary} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.cardTitle}>{item.title}</Text>
-                <Text style={styles.cardMessage}>{item.message}</Text>
-                <Text style={styles.cardTime}>
-                  {new Date(item.createdAt).toLocaleString()}
-                </Text>
-              </View>
-              {!item.read && <View style={styles.dot} />}
-            </TouchableOpacity>
+            <View style={[styles.card, !item.read && styles.cardUnread]}>
+              <TouchableOpacity
+                style={styles.cardMain}
+                onPress={() => {
+                  if (!item.read) markOne.mutate(item.id);
+                }}
+                activeOpacity={0.85}
+              >
+                <View style={[styles.iconWrap, !item.read && styles.iconWrapUnread]}>
+                  <Ionicons name={iconForType(item.type)} size={20} color={theme.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>{item.title}</Text>
+                  <Text style={styles.cardMessage}>{item.message}</Text>
+                  <Text style={styles.cardTime}>
+                    {new Date(item.createdAt).toLocaleString()}
+                  </Text>
+                </View>
+                {!item.read && <View style={styles.dot} />}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.deleteBtn}
+                onPress={() => handleDeleteOne(item.id)}
+                disabled={deletingId === item.id && deleteOne.isPending}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityLabel={t("common.delete") || "Delete"}
+              >
+                {deletingId === item.id && deleteOne.isPending ? (
+                  <ActivityIndicator size="small" color={theme.muted} />
+                ) : (
+                  <Ionicons name="trash-outline" size={18} color={theme.muted} />
+                )}
+              </TouchableOpacity>
+            </View>
           )}
           onEndReached={() => {
             if (hasMore && !isFetching) setPage((p) => p + 1);
@@ -156,13 +233,14 @@ export default function NotificationsScreen() {
           }
         />
       )}
+      {confirmDialog}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.backgroundGradient },
-  list: { padding: 16, paddingBottom: 40, flexGrow: 1 },
+  list: { padding: 16, flexGrow: 1 },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 12 },
   emptyTitle: { fontSize: 16, fontWeight: "600", color: theme.muted, textAlign: "center" },
   primaryButton: {
@@ -172,18 +250,26 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   primaryButtonText: { color: "#fff", fontWeight: "700" },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 12 },
   markAll: { color: theme.primary, fontWeight: "700", fontSize: 13 },
+  clearAll: { color: "#dc2626", fontWeight: "700", fontSize: 13 },
   card: {
     flexDirection: "row",
-    gap: 12,
+    alignItems: "flex-start",
     backgroundColor: "#fff",
     borderRadius: 16,
     padding: 14,
     borderWidth: 1,
     borderColor: theme.border,
     marginBottom: 10,
+    gap: 8,
   },
   cardUnread: { borderColor: theme.primaryBorder, backgroundColor: "#f0fdf4" },
+  cardMain: { flex: 1, flexDirection: "row", gap: 12 },
+  deleteBtn: {
+    padding: 4,
+    marginTop: 2,
+  },
   iconWrap: {
     width: 40,
     height: 40,

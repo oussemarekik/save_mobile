@@ -20,6 +20,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "@/hooks/use-auth";
 import { useFavorites, useToggleFavorite } from "@/hooks/use-shop";
 import Toast from "react-native-toast-message";
+import { LocationMap } from "@/components/LocationMap";
+import { googleMapsSearchUrl, readCoordinates } from "@/lib/maps-link";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SCREEN_CONTENT_GAP } from "@/lib/screen-insets";
 
 const DEFAULT_PROFILE_IMAGE = require("@/assets/images/logoOnly.png");
 
@@ -52,6 +56,7 @@ export default function BusinessProfile() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { t } = useLanguage();
+  const insets = useSafeAreaInsets();
   const { isAuthenticated } = useAuth();
   const { data: favorites } = useFavorites();
   const { mutate: toggleFavorite } = useToggleFavorite();
@@ -103,7 +108,10 @@ export default function BusinessProfile() {
   const avatarSource =
     avatarUri && !avatarFailed ? { uri: avatarUri } : DEFAULT_PROFILE_IMAGE;
   const displayAddress = getDisplayAddress(business.location);
-  const mapsHref = getMapsHref(business.location, business.mapsLink);
+  const place = readCoordinates(business.latitude, business.longitude, business.mapsLink);
+  const mapsHref = place
+    ? googleMapsSearchUrl(displayAddress || business.username || "", business.username, place.latitude, place.longitude)
+    : getMapsHref(business.location, business.mapsLink);
   const averageRating =
     ratingData?.averageRating != null ? Number(ratingData.averageRating).toFixed(1) : null;
   const totalRatings = ratingData?.totalRatings ?? 0;
@@ -125,7 +133,13 @@ export default function BusinessProfile() {
   return (
     <View style={styles.container}>
       <ScreenHeader title={business.username} />
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: Math.max(insets.bottom, 16) + SCREEN_CONTENT_GAP + 48 },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.profileCard}>
           <Image
             source={avatarSource}
@@ -158,12 +172,20 @@ export default function BusinessProfile() {
             </Text>
           </TouchableOpacity>
 
-          {(displayAddress || mapsHref) ? (
+          {(displayAddress || mapsHref || place) ? (
             <View style={styles.locationBlock}>
-              {displayAddress ? (
+              {place ? (
+                <LocationMap
+                  latitude={place.latitude}
+                  longitude={place.longitude}
+                  label={displayAddress || undefined}
+                  mapsUrl={mapsHref || undefined}
+                  height={170}
+                />
+              ) : displayAddress ? (
                 <Text style={styles.location}>{displayAddress}</Text>
               ) : null}
-              {mapsHref ? (
+              {mapsHref && !place ? (
                 <TouchableOpacity
                   style={styles.mapsButton}
                   onPress={() => Linking.openURL(mapsHref)}
@@ -187,7 +209,23 @@ export default function BusinessProfile() {
           </View>
         ) : (
           offers.map((product: any) => (
-            <BagCard key={product.id} product={product} store={product.store} />
+            <BagCard
+              key={product.id}
+              product={product}
+              store={{
+                id: business.id,
+                name: business.username,
+                description: displayAddress || "",
+                address: displayAddress || "",
+                imageUrl: product.imageUrl || avatarUri || "",
+                logoUrl: avatarUri || undefined,
+                mapsLink: business.mapsLink,
+                latitude: business.latitude,
+                longitude: business.longitude,
+                category: product.foodType || "",
+                rating: averageRating,
+              }}
+            />
           ))
         )}
       </ScrollView>
@@ -213,7 +251,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  content: { padding: 16, gap: 12, paddingBottom: 40 },
+  content: { paddingHorizontal: 16, paddingTop: SCREEN_CONTENT_GAP, gap: 12 },
   profileCard: {
     backgroundColor: theme.card,
     borderRadius: 20,
@@ -255,13 +293,14 @@ const styles = StyleSheet.create({
   favoriteTextActive: { color: "#ef4444" },
   locationBlock: {
     marginTop: 10,
-    alignItems: "center",
+    alignItems: "stretch",
     gap: 8,
-    paddingHorizontal: 12,
+    paddingHorizontal: 4,
     width: "100%",
   },
   location: { fontSize: 14, color: theme.muted, textAlign: "center" },
   mapsButton: {
+    alignSelf: "center",
     flexDirection: "row",
     alignItems: "center",
     gap: 6,

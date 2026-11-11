@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Linking } from "react-native";
 import { useRouter } from "expo-router";
 import { useLanguage } from "@/context/LanguageContext";
+import { useAuth } from "@/hooks/use-auth";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { theme } from "@/lib/theme";
 import { Ionicons } from "@expo/vector-icons";
@@ -9,7 +10,11 @@ import { Ionicons } from "@expo/vector-icons";
 export default function HelpSupport() {
   const router = useRouter();
   const { t } = useLanguage();
+  const { user } = useAuth();
   const [openFaq, setOpenFaq] = useState<number | null>(0);
+  const isProvider =
+    user?.role === "PROVIDER" || user?.role === "PENDING_PROVIDER";
+  const profileHref = isProvider ? "/(provider)/profile" : "/(client)/profile";
 
   const items = [
     { icon: "chatbubble-outline" as const, title: t("help.contactUs"), desc: t("help.contactUsDesc"), onPress: () => router.push("/contact" as any) },
@@ -26,7 +31,7 @@ export default function HelpSupport() {
 
   return (
     <View style={styles.container}>
-      <ScreenHeader title={t("profile.helpSupport")} onBack={() => router.push("/(client)/profile")} />
+      <ScreenHeader title={t("profile.helpSupport")} onBack={() => router.push(profileHref as any)} />
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.infoCard}>
           <Ionicons name="help-circle-outline" size={24} color={theme.primary} />

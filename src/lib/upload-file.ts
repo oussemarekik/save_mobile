@@ -10,11 +10,13 @@ export function normalizeUploadFile(file: UploadFileInput, index: number) {
     `image_${Date.now()}_${index}.jpg`;
 
   let mimeType = (typeof file === "object" && file.mimeType) || "image/jpeg";
-  if (mimeType === "image/jpg" || mimeType === "image/heic" || mimeType === "image/heif") {
-    mimeType = "image/jpeg";
-  }
-  // Android pickers sometimes return a generic "image" type.
-  if (mimeType === "image") {
+  if (
+    mimeType === "image/jpg" ||
+    mimeType === "image/heic" ||
+    mimeType === "image/heif" ||
+    mimeType === "image/webp" ||
+    mimeType === "image"
+  ) {
     mimeType = "image/jpeg";
   }
 
@@ -31,9 +33,14 @@ export function normalizeUploadFile(file: UploadFileInput, index: number) {
   return { uri, fileName, mimeType };
 }
 
+function pathFileName(uri: string): string {
+  return uri.split("/").pop()?.split("?")[0] ?? "";
+}
+
 /**
- * Android image pickers often return content:// URIs that FormData/fetch cannot
- * read. Copy into the app cache so uploads always use a file:// path.
+ * Pickers often return content://, ph://, or a file whose name is .heic / .webp
+ * or has no extension. The API only accepts jpg, png and gif filenames, so copy
+ * into the cache under a safe name before upload.
  */
 export async function ensureUploadableUri(
   uri: string,
@@ -43,30 +50,29 @@ export async function ensureUploadableUri(
     return uri;
   }
 
-  if (uri.startsWith("file://")) {
-    return uri;
+  let from = uri;
+  if (from.startsWith("/") && Platform.OS === "android") {
+    from = `file://${from}`;
   }
 
-  // Absolute filesystem path without scheme (some Android builds)
-  if (uri.startsWith("/") && Platform.OS === "android") {
-    return `file://${uri}`;
+  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
+  if (from.startsWith("file://") && pathFileName(from) === safeName) {
+    return from;
   }
 
   const cacheDir = FileSystem.cacheDirectory;
   if (!cacheDir) {
-    return uri;
+    return from;
   }
 
-  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
   const dest = `${cacheDir}upload_${Date.now()}_${safeName}`;
 
   try {
-    await FileSystem.copyAsync({ from: uri, to: dest });
+    await FileSystem.copyAsync({ from, to: dest });
     return dest;
   } catch {
-    // Last resort: try reading as base64 and rewriting as a local file
     try {
-      const base64 = await FileSystem.readAsStringAsync(uri, {
+      const base64 = await FileSystem.readAsStringAsync(from, {
         encoding: FileSystem.EncodingType.Base64,
       });
       await FileSystem.writeAsStringAsync(dest, base64, {
@@ -74,7 +80,7 @@ export async function ensureUploadableUri(
       });
       return dest;
     } catch {
-      return uri;
+      return from;
     }
   }
 }

@@ -14,6 +14,9 @@ export default function ContactScreen() {
   const router = useRouter();
   const { t } = useLanguage();
   const { user } = useAuth();
+  const isProvider =
+    user?.role === "PROVIDER" || user?.role === "PENDING_PROVIDER";
+  const profileHref = isProvider ? "/(provider)/profile" : "/(client)/profile";
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({ name: "", email: "", subject: "", message: "" });
 
@@ -52,7 +55,7 @@ export default function ContactScreen() {
 
   return (
     <View style={styles.container}>
-      <ScreenHeader title={t("contact.title")} subtitle={t("contact.subtitle")} onBack={() => router.push("/(client)/profile")} />
+      <ScreenHeader title={t("contact.title")} subtitle={t("contact.subtitle")} onBack={() => router.push(profileHref as any)} />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Field label={t("contact.name")} value={form.name} onChangeText={(name: string) => setForm((f) => ({ ...f, name }))} required />
         <Field label={t("contact.email")} value={form.email} onChangeText={(email: string) => setForm((f) => ({ ...f, email }))} keyboardType="email-address" required />
